@@ -34,7 +34,7 @@ fn main() {
 
     let (log_tx, log_rx) = mpsc::sync_channel::<Log>(LOG_BUFFER_CAPACITY);
 
-    thread::spawn(move || {
+    let logger_handle = thread::spawn(move || {
         run_logger(log_rx);
     });
 
@@ -88,9 +88,9 @@ fn main() {
         }
     }).ok();
 
-    state.cpu_active_ms.fetch_add(state.uptime_ms() - now, Ordering::Relaxed);
+    state.cpu_active_ms.fetch_add(state.uptime_ms() - now, Ordering::SeqCst);
 
-    while state.is_running.load(Ordering::Relaxed) {
+    while state.is_running.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_millis(MAIN_MS));
     }
 
@@ -103,4 +103,8 @@ fn main() {
             timestamp: state.uptime_ms(),
         }
     }).ok();
+
+    drop(log_tx); // Drop Sender so the Receiver Know There is No More Logs
+
+    logger_handle.join().unwrap(); // Wait until All Logs printed
 }

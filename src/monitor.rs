@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{SyncSender};
 use std::thread;
-use crate::config::{FAULT_RECOVERY_MS, DEGRADED_TO_NORMAL_THRESHOLD, MONITOR_MS, MONITOR_PRIORITY, NORMAL_TO_DEGRADED_THRESHOLD, NUMBER_OF_CORES};
+use crate::config::{DEGRADED_TO_NORMAL_THRESHOLD, FAULT_RECOVERY_MS, MONITOR_MS, MONITOR_PRIORITY, NORMAL_TO_DEGRADED_THRESHOLD, NUMBER_OF_CORES};
 use thread_priority::*;
 
 pub fn run_health_monitor(
@@ -16,14 +16,14 @@ pub fn run_health_monitor(
 ) {
     set_current_thread_priority(ThreadPriority::Crossplatform(MONITOR_PRIORITY.try_into().unwrap())).unwrap();
 
-    while state.is_running.load(Ordering::Relaxed) {
+    while state.is_running.load(Ordering::SeqCst) {
         let now = state.uptime_ms();
 
         for sensor in &state.sensors {
             let last_seen = sensor.heartbeat.load(Ordering::Acquire);
             
             // "3 consecutive missed cycles" limit
-            let limit: u64 = if state.degraded_mode.load(Ordering::Relaxed) && sensor.priority != Priority::Critical {
+            let limit: u64 = if state.degraded_mode.load(Ordering::Acquire) && sensor.priority != Priority::Critical {
                 sensor.period * 3 * 2 // If Degraded and Non-Critical, Task Period Doubles
             } else {
                 sensor.period * 3 // 3 Cycles
@@ -38,14 +38,15 @@ pub fn run_health_monitor(
                 };
                 
                 if sensor.fault.load(Ordering::Acquire) != 0 {
-                    let recovery_time = now - sensor.fault_timestamp.load(Ordering::Relaxed);
+                    let fault_timestamp = sensor.fault_timestamp.load(Ordering::Acquire);
+                    let recovery_time = now - fault_timestamp;
 
                     let _ = log_tx.try_send(Log {
                         source: LogSource::HealthMonitor,
                         event: safety_alert_event
                     });
 
-                    if recovery_time > FAULT_RECOVERY_MS {
+                    if recovery_time > FAULT_RECOVERY_MS && fault_timestamp != 0 {
                         downlink_buffer.push_and_log(LogSource::HealthMonitor, 
                             TelemetryPacket{
                             priority: Priority::Critical,
@@ -62,10 +63,11 @@ pub fn run_health_monitor(
                         }, 
                         &state, &log_tx, &downlink_buffer);
 
-                        state.is_running.swap(false, Ordering::Relaxed);
+                        state.is_running.store(false, Ordering::SeqCst);
                     }
 
                     sensor.fault.store(0, Ordering::Release);
+                    sensor.fault_timestamp.store(0, Ordering::Release);
                 }
 
                 downlink_buffer.push_and_log(LogSource::HealthMonitor, 
@@ -82,10 +84,11 @@ pub fn run_health_monitor(
         }
 
         for subsystem in &state.subsystem_health {
-            let recovery_time = now - subsystem.fault_timestamp.load(Ordering::Relaxed);
+            let fault_timestamp = subsystem.fault_timestamp.load(Ordering::Acquire);
+            let recovery_time = now - fault_timestamp;
 
-            if subsystem.fault.load(Ordering::Relaxed) && 
-            subsystem.fault_timestamp.load(Ordering::Relaxed) != 0 {
+            if subsystem.fault.load(Ordering::Acquire) && 
+            subsystem.fault_timestamp.load(Ordering::Acquire) != 0 {
                 downlink_buffer.push_and_log(LogSource::HealthMonitor, 
                     TelemetryPacket{
                     priority: Priority::Critical,
@@ -102,7 +105,7 @@ pub fn run_health_monitor(
                 }, 
                 &state, &log_tx, &downlink_buffer);
 
-                if recovery_time > FAULT_RECOVERY_MS {
+                if recovery_time > FAULT_RECOVERY_MS && fault_timestamp != 0 {
                     downlink_buffer.push_and_log(LogSource::HealthMonitor, 
                         TelemetryPacket{
                         priority: Priority::Critical,
@@ -119,11 +122,11 @@ pub fn run_health_monitor(
                     }, 
                     &state, &log_tx, &downlink_buffer);
 
-                    state.is_running.swap(false, Ordering::Relaxed);
+                    state.is_running.store(false, Ordering::SeqCst);
                 }
 
-                subsystem.fault.swap(false, Ordering::Release);
-                subsystem.fault_timestamp.store(0, Ordering::Relaxed);
+                subsystem.fault.store(false, Ordering::Release);
+                subsystem.fault_timestamp.store(0, Ordering::Release);
             }
         }
 
@@ -135,7 +138,7 @@ pub fn run_health_monitor(
         state.buffer_fill_rate.store(fill_rate_percent, Ordering::Relaxed);
 
         if fill_rate_percent >= NORMAL_TO_DEGRADED_THRESHOLD {
-            if !state.degraded_mode.swap(true, Ordering::SeqCst) {
+            if !state.degraded_mode.swap(true, Ordering::Release) {
                  downlink_buffer.push_and_log(LogSource::HealthMonitor, 
                     TelemetryPacket{
                     priority: Priority::Critical,
@@ -147,6 +150,7 @@ pub fn run_health_monitor(
                                 data: EventData::QueuePerformance {
                                     latency_ms: downlink_buffer.metrics.last_latency_ms.load(Ordering::Relaxed),
                                     jitter_ms: downlink_buffer.metrics.jitter_ms.load(Ordering::Relaxed),
+                                    buffer_fill_rate: fill_rate_percent,
                                 },
                                 timestamp: now,
                             }
@@ -156,7 +160,7 @@ pub fn run_health_monitor(
                 &state, &log_tx, &downlink_buffer);
             }
         } else if fill_rate_percent < DEGRADED_TO_NORMAL_THRESHOLD {
-            if state.degraded_mode.swap(false, Ordering::SeqCst) {
+            if state.degraded_mode.swap(false, Ordering::Release) {
                  downlink_buffer.push_and_log(LogSource::HealthMonitor, 
                     TelemetryPacket{
                     priority: Priority::Critical,
@@ -168,6 +172,7 @@ pub fn run_health_monitor(
                                 data: EventData::QueuePerformance {
                                     latency_ms: downlink_buffer.metrics.last_latency_ms.load(Ordering::Relaxed),
                                     jitter_ms: downlink_buffer.metrics.jitter_ms.load(Ordering::Relaxed),
+                                    buffer_fill_rate: fill_rate_percent,
                                 },
                                 timestamp: now,
                             }
@@ -178,13 +183,13 @@ pub fn run_health_monitor(
             }
         }
 
-        state.cpu_active_ms.fetch_add(state.uptime_ms() - now, Ordering::Relaxed);
+        state.cpu_active_ms.fetch_add(state.uptime_ms() - now, Ordering::SeqCst);
 
-        let total_cpu_active_ms = state.cpu_active_ms.load(Ordering::Relaxed);
-        let total_possible_uptime = (state.uptime_ms() * NUMBER_OF_CORES).max(1); // If Below 1 then set to 1
+        let current_uptime = state.uptime_ms();
+        let total_cpu_active_ms = state.cpu_active_ms.load(Ordering::SeqCst) as f32;
+        let total_possible_uptime: f32 = (current_uptime * NUMBER_OF_CORES).max(1) as f32; // If Below 1 then set to 1
 
-
-        let cpu_active_ms = state.uptime_ms() * (total_cpu_active_ms / total_possible_uptime);
+        let cpu_active_ms = (current_uptime as f32 * (total_cpu_active_ms / total_possible_uptime)) as u64;
 
         downlink_buffer.push_and_log(LogSource::HealthMonitor, 
             TelemetryPacket{
@@ -196,7 +201,7 @@ pub fn run_health_monitor(
                         event_id: EventID::ResourceUtilization,
                         data: EventData::SystemStats {
                             active_ms: cpu_active_ms,
-                            inactive_ms: total_possible_uptime - cpu_active_ms,
+                            inactive_ms: current_uptime - cpu_active_ms,
                         },
                         timestamp: now,
                     }

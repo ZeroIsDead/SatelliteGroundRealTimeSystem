@@ -13,7 +13,7 @@ impl BoundedBuffer {
     pub fn new(capacity: usize) -> Self {
         Self {
             heap: Mutex::new(BinaryHeap::with_capacity(capacity)),
-            capacity,
+            capacity: capacity,
             metrics: Metrics {
                 last_latency_ms: AtomicU32::new(0),
                 jitter_ms: AtomicU32::new(0),
@@ -26,30 +26,42 @@ impl BoundedBuffer {
 
         if heap.len() < self.capacity {
             heap.push(item);
-            None 
+            None
         } else {
-            if item.priority == Priority::Low {
-                return Some(item); 
+            let mut data = std::mem::take(&mut *heap).into_vec();
+
+            let min_idx = data.iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| a.cmp(b))
+                .map(|(idx, _)| idx);
+
+            if let Some(idx) = min_idx {
+                if item > data[idx] {
+                    let dropped = data.swap_remove(idx); 
+                    data.push(item);                    
+                    *heap = BinaryHeap::from(data);     
+                    Some(dropped)
+                } else {
+                    *heap = BinaryHeap::from(data);
+                    Some(item) 
+                }
+            } else {
+                Some(item)
             }
-
-            let mut vec = heap.drain().collect::<Vec<_>>();
-            
-            vec.sort_unstable_by(|a, b| a.cmp(b).reverse()); 
-            
-            let dropped_item = vec.remove(0); 
-            
-            vec.push(item); 
-            
-            *heap = BinaryHeap::from(vec);
-
-            Some(dropped_item) 
         }
     }
 
     pub fn push_and_log(&self, source: LogSource, item: TelemetryPacket, state: &Arc<SatelliteState>, log_tx: &SyncSender<Log>, downlink_buffer: &Arc<BoundedBuffer>) {
         if let Some(dropped) = &self.push(item) { // Buffer Drop Packet Logic
             let task_id: TaskID = match dropped.payload {
-                SatelliteMessage::Telemetry{event} => event.task_id,
+                SatelliteMessage::Telemetry{event} => {
+                    let _ = log_tx.try_send(Log {
+                        source: source,
+                        event: event,
+                    });
+
+                    event.task_id
+                },
                 _ => TaskID::NetworkService
             };
 

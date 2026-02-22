@@ -17,14 +17,14 @@ pub fn run_command_executor(
 ) {
     set_current_thread_priority(ThreadPriority::Crossplatform(COMMAND_PRIORITY.try_into().unwrap())).unwrap();
 
-    while state.is_running.load(Ordering::Relaxed) {
+    while state.is_running.load(Ordering::SeqCst) {
         if let Some(packet) = uplink_buffer.pop() {
             let start_time = state.uptime_ms();
 
             match packet.payload {
                 SatelliteMessage::Command { command, .. } => {
                     if let Some(requirements) = command.required_health() {
-                        if state.subsystem_health[requirements as usize].fault_interlock.load(Ordering::Relaxed) {
+                        if state.subsystem_health[requirements as usize].fault_interlock.load(Ordering::Acquire) {
                             break;
                         }
                     }
@@ -33,7 +33,7 @@ pub fn run_command_executor(
                 _ => {}
             }
 
-            state.cpu_active_ms.fetch_add(state.uptime_ms() - start_time, Ordering::Relaxed);
+            state.cpu_active_ms.fetch_add(state.uptime_ms() - start_time, Ordering::SeqCst);
         }
         
         thread::sleep(Duration::from_millis(COMMAND_MS));
@@ -44,8 +44,8 @@ fn execute_instruction(command: Command, state: &Arc<SatelliteState>, log_tx: &S
     let task_id = match command {
         Command::ClearSubsystemFault { subsystem_id } => {
             for subsystem in &state.subsystem_health {
-                if subsystem.id == subsystem_id && subsystem.fault.load(Ordering::Relaxed) {
-                    subsystem.fault_interlock.swap(false, Ordering::Relaxed);
+                if subsystem.id == subsystem_id && subsystem.fault.load(Ordering::Acquire) {
+                    subsystem.fault_interlock.store(false, Ordering::Release);
                 }
             }
 

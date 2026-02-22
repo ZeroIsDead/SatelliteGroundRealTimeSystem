@@ -22,7 +22,7 @@ pub fn run_sensor_task(
     let interval = sensor.period;
     let mut next_wake_time = state.uptime_ms() + interval;
 
-    while state.is_running.load(Ordering::Relaxed) {
+    while state.is_running.load(Ordering::SeqCst) {
         
         let fault_event = sensor.fault.load(Ordering::Acquire);
 
@@ -59,10 +59,12 @@ pub fn run_sensor_task(
 
         let current_value = sensor.value.load(Ordering::Relaxed);
 
-        if sensor.min_data > current_value || current_value > sensor.max_data  {
+        if !sensor.has_valid_value()  {
             let now = state.uptime_ms();
 
-            let recovery_time = now - sensor.fault_timestamp.load(Ordering::Relaxed);
+            let fault_timestamp = sensor.fault_timestamp.load(Ordering::Acquire);
+
+            let recovery_time = now - fault_timestamp;
 
             downlink_buffer.push_and_log(LogSource::Sensor, 
                 TelemetryPacket{
@@ -80,7 +82,7 @@ pub fn run_sensor_task(
             }, 
             &state, &log_tx, &downlink_buffer);
 
-            if recovery_time > FAULT_RECOVERY_MS {
+            if recovery_time > FAULT_RECOVERY_MS && fault_timestamp != 0 {
                 downlink_buffer.push_and_log(LogSource::Sensor, 
                     TelemetryPacket{
                     priority: Priority::Critical,
@@ -97,12 +99,14 @@ pub fn run_sensor_task(
                 }, 
                 &state, &log_tx, &downlink_buffer);
 
-                state.is_running.swap(false, Ordering::Relaxed);
+                state.is_running.store(false, Ordering::SeqCst);
             }
 
             let reset_value = (sensor.min_data + sensor.max_data) / 2;
 
             sensor.value.store(reset_value, Ordering::Relaxed);
+            sensor.fault.store(0, Ordering::Release);
+            sensor.fault_timestamp.store(0, Ordering::Release);
         }
 
         if fault_event == EventID::CompletionDelay as u16 {
@@ -128,7 +132,7 @@ pub fn run_sensor_task(
         downlink_buffer.push_and_log(LogSource::Sensor, 
             internal_msg, &state, &log_tx, &downlink_buffer);
 
-        if state.degraded_mode.load(Ordering::Relaxed) && sensor.priority != Priority::Critical {
+        if sensor.priority != Priority::Critical && state.degraded_mode.load(Ordering::Acquire) {
             next_wake_time += interval; 
         }
 
@@ -155,7 +159,7 @@ pub fn run_sensor_task(
             next_wake_time = now;
         }
 
-        state.cpu_active_ms.fetch_add(state.uptime_ms() - now, Ordering::Relaxed);
+        state.cpu_active_ms.fetch_add(state.uptime_ms() - now, Ordering::SeqCst);
         
         next_wake_time += interval;
     }

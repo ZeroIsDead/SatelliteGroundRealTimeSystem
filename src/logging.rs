@@ -12,7 +12,8 @@ pub fn run_logger(log_rx: Receiver<Log>) {
     let mut format_buffer = String::with_capacity(256);
     let mut file = OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
+        .truncate(true)
         .open("satellite_mission.log")
         .expect("Failed to open log file");
 
@@ -75,38 +76,38 @@ pub fn run_logger(log_rx: Receiver<Log>) {
             EventID::ResourceUtilization => "Resource Utilization",
         };
 
-        let _ = write!(format_buffer, "[Satellite] [{}] Task: [{}] - Event: [{}] ", source_str, task_str, event_str);
+        let _ = write!(format_buffer, "[Satellite] [{:>7}]\tTask: [{:>30}]\tEvent: [{:>30}]\t", source_str, task_str, event_str);
 
         match log.event.data {
-            EventData::QueuePerformance { latency_ms, jitter_ms } => {
-                let _ = write!(format_buffer, "QUEUE_PERF: Latency: {}ms, Jitter: {}ms", latency_ms, jitter_ms);
+            EventData::QueuePerformance { latency_ms, jitter_ms, buffer_fill_rate } => {
+                let _ = write!(format_buffer, "QUEUE_PERF: [Latency: {}ms, Jitter: {}ms, Buffer Fill Rate: {}%]\t", latency_ms, jitter_ms, buffer_fill_rate);
             }
             EventData::SchedulingDrift { drift_ms  } => {
-                let _ = write!(format_buffer, "DRIFT: {}ms", drift_ms);
+                let _ = write!(format_buffer, "DRIFT: [{}ms]\t", drift_ms);
             }
             EventData::Hardware { value } => {
-                let _ = write!(format_buffer, "VALUE: {}", value);
+                let _ = write!(format_buffer, "VALUE: [{}]\t", value as f32 / 100 as f32); // Sensor Data Stored as Integer -> (Float with 2 Decimal Places)
             }
             EventData::SubsystemFault { subsystem_id }=> {
-                let _ = write!(format_buffer, "SUBSYSTEM: {}", match subsystem_id {
+                let _ = write!(format_buffer, "SUBSYSTEM: [{}]\t", match subsystem_id {
                     SubsystemID::Antenna => "Antenna",
                     SubsystemID::Power => "Power",
                 });
             }
             EventData::SystemStats { active_ms, inactive_ms } => {
-                let _ = write!(format_buffer, "CPU: Active: {}ms, Inactive: {}ms", active_ms, inactive_ms);
+                let _ = write!(format_buffer, "CPU: Active: [{}ms, Inactive: {}ms]\t", active_ms, inactive_ms);
 
             }
             EventData::FaultRecovery { recovery_time } => {
-                let _ = write!(format_buffer, "RECOVERY TIME: {}ms", recovery_time);
+                let _ = write!(format_buffer, "RECOVERY TIME: [{}ms]\t", recovery_time);
             }
             EventData::TimeSync { offset } => {
-                let _ = write!(format_buffer, "OFFSET: {}ms", offset);
+                let _ = write!(format_buffer, "OFFSET: [{}ms]\t", offset);
             }
             EventData::None => {}
         }
 
-        let _ = write!(format_buffer, " (Time: {} uptime ms)", log.event.timestamp);
+        let _ = write!(format_buffer, "Time: [{} uptime ms]\t", log.event.timestamp);
 
         println!("{}", format_buffer);
 

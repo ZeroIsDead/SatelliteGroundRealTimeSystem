@@ -3,7 +3,7 @@ pub const DATA_BUFFER_CAPACITY: usize = 100;
 pub const LOG_BUFFER_CAPACITY: usize = 100;
 pub const PACKET_HISTORY_BUFFER_CAPACITY: usize = 100;
 pub const NORMAL_TO_DEGRADED_THRESHOLD: u32 = 80;
-pub const DEGRADED_TO_NORMAL_THRESHOLD: u32 = 80;
+pub const DEGRADED_TO_NORMAL_THRESHOLD: u32 = 50;
 pub const NETWORK_PORT: &str = "0.0.0.0:8000";
 
 pub const MAX_SENSORS: usize = 3;
@@ -20,7 +20,7 @@ pub const COMMAND_MS: u64 = 5 * TICK_RATE;
 pub const NETWORK_MS: u64 = 2 * TICK_RATE;
 pub const MAIN_MS: u64 = 1000 * TICK_RATE;
 
-pub const FAULT_RECOVERY_MS: u64 = 100 * TICK_RATE;
+pub const FAULT_RECOVERY_MS: u64 = 200 * TICK_RATE;
 
 pub const NETWORK_PRIORITY: u8 = 5;
 pub const MONITOR_PRIORITY: u8 = 10;
@@ -29,7 +29,7 @@ pub const LOGGING_PRIORITY: u8 = 0;
 pub const COMMAND_PRIORITY: u8 = 4;
 
 // pub const NUMBER_OF_THREADS: u64 = 7;
-pub const NUMBER_OF_CORES: u64 = 8;
+pub const NUMBER_OF_CORES: u64 = 4;
 
 // Network Logic
 pub const INIT_HANDSHAKE_LIMIT_MS: u64 = 5 * TICK_RATE;

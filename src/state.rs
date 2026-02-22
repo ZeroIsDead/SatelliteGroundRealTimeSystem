@@ -49,6 +49,14 @@ pub struct SensorState {
     pub fault_timestamp: AtomicU64,
 }
 
+impl SensorState {
+    pub fn has_valid_value(&self) -> bool {
+        let value = self.value.load(Ordering::Relaxed);
+
+        value > self.min_data && value < self.max_data
+    }
+}
+
 #[derive(Debug)]
 pub struct SyncState {
     pub total_offset_ms: AtomicU64,

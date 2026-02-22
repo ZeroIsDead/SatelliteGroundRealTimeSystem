@@ -24,7 +24,7 @@ pub fn run_network_thread(
     let mut history: [Option<TelemetryPacket>; PACKET_HISTORY_BUFFER_CAPACITY] = [None; PACKET_HISTORY_BUFFER_CAPACITY]; // Fixed size array = no heap allocation jitter!
     let mut history_idx = 0;
 
-    while state.is_running.load(Ordering::Relaxed) {
+    while state.is_running.load(Ordering::SeqCst) {
         let is_visible = state.is_visible.load(Ordering::Acquire);
 
         if is_visible && !was_visible {
@@ -41,7 +41,7 @@ pub fn run_network_thread(
                         let queue_latency_ms = (state.uptime_ms() - packet.creation_time) as u32;
                         let queue_jitter_ms = downlink_buffer.metrics.last_latency_ms.load(Ordering::Relaxed) - queue_latency_ms;
 
-                        let current_sequence_no = state.packet_sequence_no.load(Ordering::Relaxed);
+                        let current_sequence_no = state.packet_sequence_no.load(Ordering::SeqCst);
                       
                         downlink_buffer.push_and_log(LogSource::Network, 
                             TelemetryPacket{
@@ -54,6 +54,7 @@ pub fn run_network_thread(
                                     data: EventData::QueuePerformance {
                                         latency_ms: queue_latency_ms,
                                         jitter_ms: queue_jitter_ms,
+                                        buffer_fill_rate: state.buffer_fill_rate.load(Ordering::Relaxed),
                                     },
                                     timestamp: state.uptime_ms(),
                                 },
@@ -69,10 +70,10 @@ pub fn run_network_thread(
                             priority: packet.priority,
                             creation_time: state.uptime_ms(),
                             payload: packet.payload,
-                            sequence_no: state.packet_sequence_no.load(Ordering::Relaxed),
+                            sequence_no: state.packet_sequence_no.load(Ordering::SeqCst),
                         };
 
-                        state.packet_sequence_no.fetch_add(1, Ordering::Relaxed);
+                        state.packet_sequence_no.fetch_add(1, Ordering::SeqCst);
 
                         history[history_idx] = Some(outgoing_telemetry);
                         history_idx = (history_idx + 1) % PACKET_HISTORY_BUFFER_CAPACITY;
@@ -115,7 +116,7 @@ pub fn run_network_thread(
 
                         let found = match packet.payload {
                             SatelliteMessage::SyncRequest => {
-                                let current_sequence_no = state.packet_sequence_no.load(Ordering::Relaxed);
+                                let current_sequence_no = state.packet_sequence_no.load(Ordering::SeqCst);
 
                                 downlink_buffer.push_and_log(LogSource::Network, 
                                     TelemetryPacket{
@@ -129,9 +130,9 @@ pub fn run_network_thread(
                                 }, 
                                 &state, &log_tx, &downlink_buffer);
 
-                                state.packet_sequence_no.fetch_add(1, Ordering::Relaxed);
+                                state.packet_sequence_no.fetch_add(1, Ordering::SeqCst);
 
-                                if state.clock_sync.is_calibrated.load(Ordering::Relaxed) {
+                                if state.clock_sync.is_calibrated.load(Ordering::SeqCst) {
                                     let _ = log_tx.send(Log {
                                         source: LogSource::Network,
                                         event: Event {
@@ -142,7 +143,7 @@ pub fn run_network_thread(
                                         }
                                     });
 
-                                    state.clock_sync.is_calibrated.swap(false, Ordering::Relaxed);
+                                    state.clock_sync.is_calibrated.store(false, Ordering::SeqCst);
                                 }
 
                                 true
@@ -156,7 +157,7 @@ pub fn run_network_thread(
                                 state.clock_sync.average_offset_ms.store(average, Ordering::Relaxed);
 
                                 if state.clock_sync.number_of_sample.load(Ordering::Relaxed) % 10 == 0 {
-                                    state.clock_sync.is_calibrated.swap(true, Ordering::Relaxed);
+                                    state.clock_sync.is_calibrated.store(true, Ordering::SeqCst);
                                     let _ = log_tx.send(Log {
                                         source: LogSource::Network,
                                         event: Event {
@@ -172,7 +173,7 @@ pub fn run_network_thread(
                             }
                             SatelliteMessage::Command { command, sent_at: _} => {
                                 if let Command::RequestRetransmit { sequence_no } = command {
-                                    let current_sequence_no = state.packet_sequence_no.load(Ordering::Relaxed);
+                                    let current_sequence_no = state.packet_sequence_no.load(Ordering::SeqCst);
 
                                     if current_sequence_no - sequence_no >= 100 {
                                         downlink_buffer.push_and_log(LogSource::Network, 
@@ -191,7 +192,7 @@ pub fn run_network_thread(
                                         }, 
                                         &state, &log_tx, &downlink_buffer);
 
-                                        state.packet_sequence_no.fetch_add(1, Ordering::Relaxed);
+                                        state.packet_sequence_no.fetch_add(1, Ordering::SeqCst);
                                     }
                                     
                                     let target_index = sequence_no % PACKET_HISTORY_BUFFER_CAPACITY as u32;
@@ -239,7 +240,7 @@ pub fn run_network_thread(
                 &state, &log_tx, &downlink_buffer);
             } 
 
-            state.cpu_active_ms.fetch_add(state.uptime_ms() - pass_start, Ordering::Relaxed);
+            state.cpu_active_ms.fetch_add(state.uptime_ms() - pass_start, Ordering::SeqCst);
         }
 
 

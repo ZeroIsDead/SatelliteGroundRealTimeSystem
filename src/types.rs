@@ -64,7 +64,7 @@ pub struct Metrics {
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone, Copy)]
 pub enum EventData {
     None,
-    QueuePerformance { latency_ms: u32, jitter_ms: u32 },
+    QueuePerformance { latency_ms: u32, jitter_ms: u32, buffer_fill_rate: u32 },
     SchedulingDrift { drift_ms: u32},
     Hardware { value: u32 }, // Sensors
     SubsystemFault { subsystem_id: SubsystemID},
@@ -96,6 +96,7 @@ pub enum Priority {
 }
 
 #[repr(u8)]
+#[derive(Debug, Copy, Clone)]
 pub enum LogSource {
     HealthMonitor = 1,
     Network = 2,

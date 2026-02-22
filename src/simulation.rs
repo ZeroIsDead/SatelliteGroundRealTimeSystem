@@ -12,20 +12,24 @@ use thread_priority::*;
 pub fn run_simulation(state: Arc<SatelliteState>) {
     set_current_thread_priority(ThreadPriority::Crossplatform(SIMULATION_PRIORITY.try_into().unwrap())).unwrap();
 
-    while state.is_running.load(Ordering::Relaxed) {
+    while state.is_running.load(Ordering::SeqCst) {
         let now = state.uptime_ms();
 
-        for i in 0..MAX_SENSORS {
+        for sensor in &state.sensors {
             let mut rng = rand::thread_rng();
 
             let val: u32 = rng.gen_range(0..101);
             let is_addition: bool = rand::random();
 
             if is_addition {
-                state.sensors[i].value.fetch_add(val, Ordering::Relaxed);
+                sensor.value.fetch_add(val, Ordering::Relaxed);
             } else {
-                state.sensors[i].value.fetch_sub(val, Ordering::Relaxed);
+                sensor.value.fetch_sub(val, Ordering::Relaxed);
+            }
 
+            if !sensor.has_valid_value() {
+                sensor.fault.store(EventID::DataCorruption as u16, Ordering::Release);
+                sensor.fault_timestamp.store(state.uptime_ms(), Ordering::Release);
             }
         }
 
@@ -46,18 +50,18 @@ pub fn run_simulation(state: Arc<SatelliteState>) {
                 state.sensors[sensor_index].value.store(SENSOR_DATA_CORRUPTION, Ordering::Relaxed);
             }
 
-            state.sensors[sensor_index].fault_timestamp.store(state.uptime_ms(), Ordering::Relaxed);
+            state.sensors[sensor_index].fault_timestamp.store(state.uptime_ms(), Ordering::SeqCst);
         }
 
         if now % SUBSYSTEM_FAULT_INJECTION_MS == 0 {
             let subsystem_index = rand::thread_rng().gen_range(0..MAX_SUBSYSTEM);
 
-            state.subsystem_health[subsystem_index].fault.swap(true, Ordering::Release);
-            state.subsystem_health[subsystem_index].fault_interlock.swap(true, Ordering::Release);
-            state.subsystem_health[subsystem_index].fault_timestamp.store(state.uptime_ms(), Ordering::Relaxed);
+            state.subsystem_health[subsystem_index].fault.store(true, Ordering::Release);
+            state.subsystem_health[subsystem_index].fault_interlock.store(true, Ordering::Release);
+            state.subsystem_health[subsystem_index].fault_timestamp.store(state.uptime_ms(), Ordering::Release);
         }
 
-        state.cpu_active_ms.fetch_add(state.uptime_ms() - now, Ordering::Relaxed);
+        state.cpu_active_ms.fetch_add(state.uptime_ms() - now, Ordering::SeqCst);
 
         thread::sleep(Duration::from_millis(TICK_RATE));
     }
