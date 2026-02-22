@@ -1,1 +1,1 @@
-# SatelliteAndGroundRTSSystem
+# SatelliteGroundRealTimeSystem
