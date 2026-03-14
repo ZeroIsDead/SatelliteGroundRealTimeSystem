@@ -23,7 +23,7 @@ use crate::sensors::run_sensor_task;
 use crate::logging::run_logger;
 use crate::monitor::run_health_monitor;
 use crate::command::run_command_executor;
-use crate::config::{DATA_BUFFER_CAPACITY, LOG_BUFFER_CAPACITY, MAIN_MS};
+use crate::config::{DATA_BUFFER_CAPACITY, LOG_BUFFER_CAPACITY, MAIN_MS, MAX_SENSORS};
 
 fn main() {
     let state = Arc::new(SatelliteState::new());
@@ -43,7 +43,7 @@ fn main() {
         run_simulation(sim_state);
     });
 
-    for i in 0..3 {
+    for i in 0..MAX_SENSORS {
         let s_state = Arc::clone(&state);
         let s_buffer = Arc::clone(&downlink_buffer);
         let s_log = log_tx.clone();

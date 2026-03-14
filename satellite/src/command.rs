@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{SyncSender};
 use std::thread;
-use crate::config::{COMMAND_MS, COMMAND_PRIORITY};
+use crate::config::{COMMAND_MS, COMMAND_PRIORITY, SEQUENCE_NOT_CONFIRMED};
 use thread_priority::*;
 
 pub fn run_command_executor(
@@ -83,7 +83,7 @@ fn execute_instruction(command: Command, state: &Arc<SatelliteState>, log_tx: &S
                     timestamp: state.uptime_ms(),
                 },
             },
-            sequence_no: 0,
+            sequence_no: SEQUENCE_NOT_CONFIRMED,
         }, 
         state, log_tx, downlink_buffer);
 
@@ -102,7 +102,7 @@ fn execute_instruction(command: Command, state: &Arc<SatelliteState>, log_tx: &S
                     timestamp: state.uptime_ms(),
                 },
         },
-        sequence_no: 0,
+        sequence_no: SEQUENCE_NOT_CONFIRMED,
     }, 
     state, log_tx, downlink_buffer);
 

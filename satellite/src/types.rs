@@ -46,7 +46,7 @@ pub enum EventID {
     // Network Events
     MissedCommunication = 401,
     DataLoss = 402,
-    PacketTooOld = 403,
+    RetransmitFailed = 403,
     SyncStart = 404,
     SyncCompleted = 405,
 

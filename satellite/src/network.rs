@@ -1,7 +1,7 @@
 use std::sync::mpsc::{SyncSender};
 use std::time::{Duration};
 use crate::types::{SatelliteMessage, TelemetryPacket, Log, *};
-use crate::config::{PACKET_HISTORY_BUFFER_CAPACITY, INIT_HANDSHAKE_LIMIT_MS, NETWORK_MS, NETWORK_PORT, NETWORK_PRIORITY, VISIBILITY_WINDOW_LIMIT_MS};
+use crate::config::{SEQUENCE_NOT_CONFIRMED, PACKET_HISTORY_BUFFER_CAPACITY, INIT_HANDSHAKE_LIMIT_MS, NETWORK_MS, NETWORK_PORT, NETWORK_PRIORITY, VISIBILITY_WINDOW_LIMIT_MS};
 use std::net::TcpStream;
 use std::io::{Read, Write};
 use std::thread;
@@ -156,7 +156,7 @@ pub fn run_network_thread(
 
                                 state.clock_sync.average_offset_ms.store(average, Ordering::Relaxed);
 
-                                if state.clock_sync.number_of_sample.load(Ordering::Relaxed) % 10 == 0 {
+                                if state.clock_sync.number_of_sample.load(Ordering::Relaxed) % 10 == 0 { // 10 Packets = Synced
                                     state.clock_sync.is_calibrated.store(true, Ordering::SeqCst);
                                     let _ = log_tx.send(Log {
                                         source: LogSource::Network,
@@ -175,7 +175,7 @@ pub fn run_network_thread(
                                 if let Command::RequestRetransmit { sequence_no } = command {
                                     let current_sequence_no = state.packet_sequence_no.load(Ordering::SeqCst);
 
-                                    if current_sequence_no - sequence_no >= 100 {
+                                    if current_sequence_no - sequence_no >= PACKET_HISTORY_BUFFER_CAPACITY as u32 {
                                         downlink_buffer.push_and_log(LogSource::Network, 
                                             TelemetryPacket{
                                             priority: packet.priority,
@@ -183,7 +183,7 @@ pub fn run_network_thread(
                                             payload: SatelliteMessage::Telemetry {
                                                 event: Event {
                                                     task_id: TaskID::NetworkService,
-                                                    event_id: EventID::PacketTooOld,
+                                                    event_id: EventID::RetransmitFailed,
                                                     data: EventData::None,
                                                     timestamp: state.uptime_ms(),
                                                 }
@@ -235,7 +235,7 @@ pub fn run_network_thread(
                             timestamp: state.uptime_ms(),
                         },
                     },
-                    sequence_no: 0,
+                    sequence_no: SEQUENCE_NOT_CONFIRMED,
                 }, 
                 &state, &log_tx, &downlink_buffer);
             } 

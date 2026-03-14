@@ -3,7 +3,7 @@ use std::sync::mpsc::SyncSender;
 use std::time::{Duration};
 use std::sync::atomic::Ordering;
 
-use crate::config::{FAULT_RECOVERY_MS, SENSOR_DELAY_MS, SENSOR_FAULT_MS};
+use crate::config::{FAULT_RECOVERY_MS, SEQUENCE_NOT_CONFIRMED, SENSOR_DELAY_MS, SENSOR_FAULT_MS, SENSOR_FAULT_NOT_CONFIRMED, TIMESTAMP_NOT_CONFIRMED};
 use crate::types::{Event, EventData, EventID, Log, LogSource, Priority, SatelliteMessage, TelemetryPacket};
 use crate::state::SatelliteState;
 use crate::buffer::BoundedBuffer;
@@ -49,7 +49,7 @@ pub fn run_sensor_task(
                             timestamp: state.uptime_ms(),
                         },
                 },
-                sequence_no: 0,
+                sequence_no: SEQUENCE_NOT_CONFIRMED,
             }, 
             &state, &log_tx, &downlink_buffer);
 
@@ -78,11 +78,11 @@ pub fn run_sensor_task(
                             timestamp: now,
                         },
                 },
-                sequence_no: 0,
+                sequence_no: SEQUENCE_NOT_CONFIRMED,
             }, 
             &state, &log_tx, &downlink_buffer);
 
-            if recovery_time > FAULT_RECOVERY_MS && fault_timestamp != 0 {
+            if recovery_time > FAULT_RECOVERY_MS && fault_timestamp != TIMESTAMP_NOT_CONFIRMED {
                 downlink_buffer.push_and_log(LogSource::Sensor, 
                     TelemetryPacket{
                     priority: Priority::Critical,
@@ -95,7 +95,7 @@ pub fn run_sensor_task(
                                 timestamp: now,
                             },
                     },
-                    sequence_no: 0,
+                    sequence_no: SEQUENCE_NOT_CONFIRMED,
                 }, 
                 &state, &log_tx, &downlink_buffer);
 
@@ -105,8 +105,8 @@ pub fn run_sensor_task(
             let reset_value = (sensor.min_data + sensor.max_data) / 2;
 
             sensor.value.store(reset_value, Ordering::Relaxed);
-            sensor.fault.store(0, Ordering::Release);
-            sensor.fault_timestamp.store(0, Ordering::Release);
+            sensor.fault.store(SENSOR_FAULT_NOT_CONFIRMED, Ordering::Release);
+            sensor.fault_timestamp.store(TIMESTAMP_NOT_CONFIRMED, Ordering::Release);
         }
 
         if fault_event == EventID::CompletionDelay as u16 {
@@ -126,7 +126,7 @@ pub fn run_sensor_task(
                     timestamp: state.uptime_ms(),
                 },
             },
-            sequence_no: 0,
+            sequence_no: SEQUENCE_NOT_CONFIRMED,
         };
 
         downlink_buffer.push_and_log(LogSource::Sensor, 
@@ -152,7 +152,7 @@ pub fn run_sensor_task(
                             timestamp: state.uptime_ms(),
                         },
                 },
-                sequence_no: 0,
+                sequence_no: SEQUENCE_NOT_CONFIRMED,
             }, 
             &state, &log_tx, &downlink_buffer);
 

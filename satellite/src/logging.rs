@@ -67,7 +67,7 @@ pub fn run_logger(log_rx: Receiver<Log>) {
             // Network Events
             EventID::MissedCommunication => "Communication Window Missed",
             EventID::DataLoss => "Packet Dropped",
-            EventID::PacketTooOld => "Packet Too Old",
+            EventID::RetransmitFailed => "Retransmit Failed",
             EventID::SyncStart => "Time Sync Start",
             EventID::SyncCompleted => "Time Sync Complete",
 

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::{config::{MAX_SENSORS, SENSOR_DATA_CORRUPTION, SIMULATION_PRIORITY}, state::SatelliteState, types::EventID};
 use std::thread;
 use std::time::Duration;
-use crate::config::{MAX_SUBSYSTEM, SENSOR_FAULT_INJECTION_MS, SUBSYSTEM_FAULT_INJECTION_MS, TICK_RATE, VISIBILITY_WINDOW_CYCLE_MS, VISIBILITY_WINDOW_LIMIT_MS};
+use crate::config::{SENSOR_INCREMENT_MAX, MAX_SUBSYSTEM, SENSOR_FAULT_INJECTION_MS, SUBSYSTEM_FAULT_INJECTION_MS, TICK_RATE, VISIBILITY_WINDOW_CYCLE_MS, VISIBILITY_WINDOW_LIMIT_MS};
 use rand::Rng;
 use thread_priority::*;
 
@@ -18,7 +18,7 @@ pub fn run_simulation(state: Arc<SatelliteState>) {
         for sensor in &state.sensors {
             let mut rng = rand::thread_rng();
 
-            let val: u32 = rng.gen_range(0..101);
+            let val: u32 = rng.gen_range(0..SENSOR_INCREMENT_MAX);
             let is_addition: bool = rand::random();
 
             if is_addition {

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{SyncSender};
 use std::thread;
-use crate::config::{DEGRADED_TO_NORMAL_THRESHOLD, FAULT_RECOVERY_MS, MONITOR_MS, MONITOR_PRIORITY, NORMAL_TO_DEGRADED_THRESHOLD, NUMBER_OF_CORES};
+use crate::config::{DEGRADED_TO_NORMAL_THRESHOLD, FAULT_RECOVERY_MS, MONITOR_MS, MONITOR_PRIORITY, NORMAL_TO_DEGRADED_THRESHOLD, SEQUENCE_NOT_CONFIRMED, NUMBER_OF_CORES, SENSOR_FAULT_NOT_CONFIRMED, TIMESTAMP_NOT_CONFIRMED};
 use thread_priority::*;
 
 pub fn run_health_monitor(
@@ -37,16 +37,16 @@ pub fn run_health_monitor(
                     timestamp: now,
                 };
                 
-                if sensor.fault.load(Ordering::Acquire) != 0 {
+                if sensor.fault.load(Ordering::Acquire) != SENSOR_FAULT_NOT_CONFIRMED {
                     let fault_timestamp = sensor.fault_timestamp.load(Ordering::Acquire);
                     let recovery_time = now - fault_timestamp;
 
-                    let _ = log_tx.try_send(Log {
+                    let _ = log_tx.send(Log {
                         source: LogSource::HealthMonitor,
                         event: safety_alert_event
                     });
 
-                    if recovery_time > FAULT_RECOVERY_MS && fault_timestamp != 0 {
+                    if recovery_time > FAULT_RECOVERY_MS && fault_timestamp != TIMESTAMP_NOT_CONFIRMED {
                         downlink_buffer.push_and_log(LogSource::HealthMonitor, 
                             TelemetryPacket{
                             priority: Priority::Critical,
@@ -59,15 +59,16 @@ pub fn run_health_monitor(
                                         timestamp: now,
                                     },
                             },
-                            sequence_no: 0,
+                            sequence_no: SEQUENCE_NOT_CONFIRMED,
                         }, 
                         &state, &log_tx, &downlink_buffer);
 
                         state.is_running.store(false, Ordering::SeqCst);
                     }
 
-                    sensor.fault.store(0, Ordering::Release);
-                    sensor.fault_timestamp.store(0, Ordering::Release);
+                    // RESET FAULTS
+                    sensor.fault.store(SENSOR_FAULT_NOT_CONFIRMED, Ordering::Release);
+                    sensor.fault_timestamp.store(TIMESTAMP_NOT_CONFIRMED, Ordering::Release);
                 }
 
                 downlink_buffer.push_and_log(LogSource::HealthMonitor, 
@@ -77,7 +78,7 @@ pub fn run_health_monitor(
                     payload: SatelliteMessage::Telemetry {
                         event: safety_alert_event,
                     },
-                    sequence_no: 0,
+                    sequence_no: SEQUENCE_NOT_CONFIRMED,
                 }, 
                 &state, &log_tx, &downlink_buffer);
             }
@@ -88,7 +89,7 @@ pub fn run_health_monitor(
             let recovery_time = now - fault_timestamp;
 
             if subsystem.fault.load(Ordering::Acquire) && 
-            subsystem.fault_timestamp.load(Ordering::Acquire) != 0 {
+            subsystem.fault_timestamp.load(Ordering::Acquire) != TIMESTAMP_NOT_CONFIRMED {
                 downlink_buffer.push_and_log(LogSource::HealthMonitor, 
                     TelemetryPacket{
                     priority: Priority::Critical,
@@ -101,11 +102,11 @@ pub fn run_health_monitor(
                                 timestamp: now,
                             },
                     },
-                    sequence_no: 0,
+                    sequence_no: SEQUENCE_NOT_CONFIRMED,
                 }, 
                 &state, &log_tx, &downlink_buffer);
 
-                if recovery_time > FAULT_RECOVERY_MS && fault_timestamp != 0 {
+                if recovery_time > FAULT_RECOVERY_MS && fault_timestamp != TIMESTAMP_NOT_CONFIRMED {
                     downlink_buffer.push_and_log(LogSource::HealthMonitor, 
                         TelemetryPacket{
                         priority: Priority::Critical,
@@ -118,7 +119,7 @@ pub fn run_health_monitor(
                                     timestamp: now,
                                 },
                         },
-                        sequence_no: 0,
+                        sequence_no: SEQUENCE_NOT_CONFIRMED,
                     }, 
                     &state, &log_tx, &downlink_buffer);
 
@@ -126,7 +127,7 @@ pub fn run_health_monitor(
                 }
 
                 subsystem.fault.store(false, Ordering::Release);
-                subsystem.fault_timestamp.store(0, Ordering::Release);
+                subsystem.fault_timestamp.store(TIMESTAMP_NOT_CONFIRMED, Ordering::Release);
             }
         }
 
@@ -155,7 +156,7 @@ pub fn run_health_monitor(
                                 timestamp: now,
                             }
                     },
-                    sequence_no: 0,
+                    sequence_no: SEQUENCE_NOT_CONFIRMED,
                 }, 
                 &state, &log_tx, &downlink_buffer);
             }
@@ -177,7 +178,7 @@ pub fn run_health_monitor(
                                 timestamp: now,
                             }
                     },
-                    sequence_no: 0,
+                    sequence_no: SEQUENCE_NOT_CONFIRMED,
                 }, 
                 &state, &log_tx, &downlink_buffer);
             }
@@ -206,7 +207,7 @@ pub fn run_health_monitor(
                         timestamp: now,
                     }
             },
-            sequence_no: 0,
+            sequence_no: SEQUENCE_NOT_CONFIRMED,
         }, 
         &state, &log_tx, &downlink_buffer);
 

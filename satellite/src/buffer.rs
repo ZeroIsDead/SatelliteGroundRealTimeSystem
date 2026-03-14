@@ -2,6 +2,7 @@ use std::{collections::BinaryHeap, sync::mpsc::SyncSender};
 use std::sync::{Mutex, Arc};
 use crate::{state::SatelliteState, types::{TaskID, EventID, Log, Event,SatelliteMessage, LogSource, EventData, Metrics, Priority, TelemetryPacket}};
 use std::sync::atomic::{AtomicU32};
+use crate::config::{SEQUENCE_NOT_CONFIRMED};
 
 pub struct BoundedBuffer {
     heap: Mutex<BinaryHeap<TelemetryPacket>>,
@@ -55,7 +56,7 @@ impl BoundedBuffer {
         if let Some(dropped) = &self.push(item) { // Buffer Drop Packet Logic
             let task_id: TaskID = match dropped.payload {
                 SatelliteMessage::Telemetry{event} => {
-                    let _ = log_tx.try_send(Log {
+                    let _ = log_tx.send(Log {
                         source: source,
                         event: event,
                     });
@@ -65,7 +66,7 @@ impl BoundedBuffer {
                 _ => TaskID::NetworkService
             };
 
-            let _ = log_tx.try_send(Log {
+            let _ = log_tx.send(Log {
                 source: source,
                 event: Event {
                     task_id: task_id,
@@ -86,7 +87,7 @@ impl BoundedBuffer {
                         timestamp: state.get_synchronized_timestamp(),
                     }
                 }, 
-                sequence_no: 0, 
+                sequence_no: SEQUENCE_NOT_CONFIRMED, 
             });
         }
     }
