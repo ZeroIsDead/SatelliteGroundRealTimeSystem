@@ -1,62 +1,109 @@
 use std::collections::BinaryHeap;
-use std::cmp::Ordering as StdOrdering;
-use std::time::Instant;
-use crate::types::{Command, DISPATCH_DEADLINE_MS};
+use std::io::Write;
 use std::net::TcpStream;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc::{Receiver, SyncSender};
+use std::time::Instant;
+use std::cmp::Ordering as StdOrdering;
+
+use crate::config::{DISPATCH_DEADLINE_MS, SCHEDULER_TICK_RATE};
+use crate::types::{Command, SatelliteMessage};
+use crate::state::GcsState;
+use crate::logger::{GcsLogMessage, GcsEvent};
 
 #[derive(Debug)]
-struct ScheduledCommand {
-    priority: u8, // 0 = Low, 255 = Critical
+struct PrioritizedCommand {
+    priority: u8,
     cmd: Command,
-    created_at: Instant,
 }
 
-// Implement traits so BinaryHeap knows how to sort by priority
-impl Ord for ScheduledCommand {
+impl Ord for PrioritizedCommand {
     fn cmp(&self, other: &Self) -> StdOrdering { self.priority.cmp(&other.priority) }
 }
-impl PartialOrd for ScheduledCommand {
+impl PartialOrd for PrioritizedCommand {
     fn partial_cmp(&self, other: &Self) -> Option<StdOrdering> { Some(self.cmp(other)) }
 }
-impl PartialEq for ScheduledCommand {
+impl PartialEq for PrioritizedCommand {
     fn eq(&self, other: &Self) -> bool { self.priority == other.priority }
 }
-impl Eq for ScheduledCommand {}
+impl Eq for PrioritizedCommand {}
 
-pub fn run_command_scheduler(mut stream: TcpStream, cmd_rx: Receiver<Command>, interlocks: Arc<InterlockManager>) {
-    let mut queue = BinaryHeap::new();
+pub fn run_command_scheduler(
+    mut stream: TcpStream,
+    cmd_rx: Receiver<Command>,
+    state: Arc<GcsState>,
+    log_tx: SyncSender<GcsLogMessage>,
+    gcs_boot_time: Instant,
+) {
+    let mut queue: BinaryHeap<PrioritizedCommand> = BinaryHeap::new();
+    println!("[Scheduler] Command scheduler active.");
 
-    loop {
-        // 1. Pull all waiting commands from the channel into our Priority Queue
+    while state.is_running.load(Ordering::Relaxed) {
+        let loop_start = Instant::now();
+        let current_gcs_time = gcs_boot_time.elapsed().as_millis() as u64;
+
+        // 1. Drain pending commands into Priority Queue
         while let Ok(cmd) = cmd_rx.try_recv() {
             let priority = if cmd.is_urgent() { 255 } else { 10 };
-            queue.push(ScheduledCommand { priority, cmd, created_at: Instant::now() });
+            queue.push(PrioritizedCommand { priority, cmd });
         }
 
-        // 2. Process the highest priority command
-        if let Some(scheduled) = queue.pop() {
-            // Requirement 3: Validate against Interlocks
-            if interlocks.is_safe(&scheduled.cmd) {
-                let start_dispatch = Instant::now();
+        // 2. Process highest priority command
+        if let Some(p_cmd) = queue.pop() {
+            let cmd_name = get_cmd_name(&p_cmd.cmd);
 
-                // Serialization and Framing
-                let bytes = bincode::serialize(&scheduled.cmd).unwrap();
-                let len = (bytes.len() as u16).to_be_bytes();
+            // --- REQUIREMENT 3: Interlock Validation ---
+            if state.interlocks.is_command_safe(&p_cmd.cmd) {
                 
-                let _ = stream.write_all(&len);
-                let _ = stream.write_all(&bytes);
+                // --- REQUIREMENT 2: 2ms Dispatch Deadline ---
+                let dispatch_start = Instant::now();
+                
+                let msg = SatelliteMessage::Uplink(p_cmd.cmd.clone());
+                let bytes = bincode::serialize(&msg).unwrap();
+                let len_header = (bytes.len() as u16).to_be_bytes();
 
-                // Requirement 2: Log Deadline Adherence
-                let dispatch_time = start_dispatch.elapsed().as_millis();
-                if dispatch_time > DISPATCH_DEADLINE_MS {
-                    println!("[LOG] Urgent Deadline Missed: Dispatch took {}ms", dispatch_time);
+                if stream.write_all(&len_header).is_ok() && stream.write_all(&bytes).is_ok() {
+                    let dispatch_duration = dispatch_start.elapsed().as_millis();
+                    
+                    if dispatch_duration > DISPATCH_DEADLINE_MS {
+                        state.metrics.record_deadline_miss();
+                        let _ = log_tx.try_send(GcsLogMessage {
+                            timestamp_ms: current_gcs_time,
+                            event: GcsEvent::DeadlineMiss {
+                                task: "Dispatch", limit_ms: DISPATCH_DEADLINE_MS, actual_ms: dispatch_duration
+                            }
+                        });
+                    }
+
+                    let _ = log_tx.try_send(GcsLogMessage {
+                        timestamp_ms: current_gcs_time,
+                        event: GcsEvent::CommandDispatch { cmd_name, dispatch_time_ms: dispatch_duration }
+                    });
                 }
             } else {
-                // Requirement 3: Document rejection reasons
-                println!("[REJECTED] Command {:?} blocked by active interlock.", scheduled.cmd);
+                // Command Rejected by Interlock
+                let _ = log_tx.try_send(GcsLogMessage {
+                    timestamp_ms: current_gcs_time,
+                    event: GcsEvent::CommandRejected { cmd_name, reason: "Safety Interlock Active" }
+                });
             }
         }
-        
-        thread::sleep(Duration::from_millis(1)); // High-frequency polling
+
+        // Maintain polling rate to avoid 100% CPU usage
+        let elapsed = loop_start.elapsed();
+        if elapsed < SCHEDULER_TICK_RATE {
+            std::thread::sleep(SCHEDULER_TICK_RATE - elapsed);
+        }
+    }
+}
+
+fn get_cmd_name(cmd: &Command) -> &'static str {
+    match cmd {
+        Command::RotateAntenna { .. } => "RotateAntenna",
+        Command::SetPowerMode { .. } => "SetPowerMode",
+        Command::ClearFault { .. } => "ClearFault",
+        Command::RequestRetransmit { .. } => "RequestRetransmit",
+        Command::SystemReboot => "SystemReboot",
     }
 }
