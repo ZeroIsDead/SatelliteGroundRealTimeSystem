@@ -12,6 +12,9 @@ use thread_priority::*;
 pub fn run_simulation(state: Arc<SatelliteState>) {
     set_current_thread_priority(ThreadPriority::Crossplatform(SIMULATION_PRIORITY.try_into().unwrap())).unwrap();
 
+    let mut subsystem_fault_interval = SUBSYSTEM_FAULT_INJECTION_MS;
+    let mut sensor_fault_interval = SENSOR_FAULT_INJECTION_MS;
+
     while state.is_running.load(Ordering::SeqCst) {
         let now = state.uptime_ms();
 
@@ -21,11 +24,16 @@ pub fn run_simulation(state: Arc<SatelliteState>) {
             let val: u32 = rng.gen_range(0..SENSOR_INCREMENT_MAX);
             let is_addition: bool = rand::random();
 
-            if is_addition {
-                sensor.value.fetch_add(val, Ordering::Relaxed);
+
+            let current = sensor.value.load(Ordering::Relaxed);
+
+            let new_value = if is_addition {
+                current.saturating_add(val).min(sensor.max_data)
             } else {
-                sensor.value.fetch_sub(val, Ordering::Relaxed);
-            }
+                current.saturating_sub(val).max(sensor.min_data)
+            };
+
+            sensor.value.store(new_value, Ordering::Relaxed);
 
             if !sensor.has_valid_value() {
                 sensor.fault.store(EventID::DataCorruption as u16, Ordering::Release);
@@ -33,16 +41,15 @@ pub fn run_simulation(state: Arc<SatelliteState>) {
             }
         }
 
-        if now % VISIBILITY_WINDOW_CYCLE_MS == 0 {
-            state.is_visible.store(true, Ordering::Release);
-        } else if now % VISIBILITY_WINDOW_CYCLE_MS == VISIBILITY_WINDOW_LIMIT_MS {
-            state.is_visible.store(false, Ordering::Release);
-        }
+    
+        state.is_visible.store(now % VISIBILITY_WINDOW_CYCLE_MS < VISIBILITY_WINDOW_LIMIT_MS, Ordering::Release);
 
-        if now % SENSOR_FAULT_INJECTION_MS == 0 {
+        if now >= sensor_fault_interval {
             let sensor_index = rand::thread_rng().gen_range(0..MAX_SENSORS);
 
             let fault = rand::thread_rng().gen_range(EventID::StartDelay as u16..EventID::DataCorruption as u16 + 1);
+
+            state.sensors[sensor_index].fault_timestamp.store(state.uptime_ms(), Ordering::SeqCst);
 
             state.sensors[sensor_index].fault.store(fault, Ordering::Release);
         
@@ -50,19 +57,21 @@ pub fn run_simulation(state: Arc<SatelliteState>) {
                 state.sensors[sensor_index].value.store(SENSOR_DATA_CORRUPTION, Ordering::Relaxed);
             }
 
-            state.sensors[sensor_index].fault_timestamp.store(state.uptime_ms(), Ordering::SeqCst);
+            sensor_fault_interval = now + SENSOR_FAULT_INJECTION_MS;
         }
 
-        if now % SUBSYSTEM_FAULT_INJECTION_MS == 0 {
+        if now >= subsystem_fault_interval {
             let subsystem_index = rand::thread_rng().gen_range(0..MAX_SUBSYSTEM);
 
+            state.subsystem_health[subsystem_index].fault_timestamp.store(state.uptime_ms(), Ordering::Release);
             state.subsystem_health[subsystem_index].fault.store(true, Ordering::Release);
             state.subsystem_health[subsystem_index].fault_interlock.store(true, Ordering::Release);
-            state.subsystem_health[subsystem_index].fault_timestamp.store(state.uptime_ms(), Ordering::Release);
+
+            subsystem_fault_interval = now + SUBSYSTEM_FAULT_INJECTION_MS;
         }
 
         state.cpu_active_ms.fetch_add(state.uptime_ms() - now, Ordering::SeqCst);
 
-        thread::sleep(Duration::from_millis(TICK_RATE));
+        thread::sleep(Duration::from_micros(TICK_RATE));
     }
 }

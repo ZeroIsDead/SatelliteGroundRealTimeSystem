@@ -63,7 +63,7 @@ fn main() {
     });
 
     let c_state = Arc::clone(&state);
-    let c_downlink_buffer = Arc::clone(&uplink_buffer);
+    let c_downlink_buffer = Arc::clone(&downlink_buffer);
     let c_uplink_buffer = Arc::clone(&uplink_buffer);
     let c_log = log_tx.clone();
     thread::spawn(move || {
@@ -78,7 +78,7 @@ fn main() {
         run_network_thread(n_state, n_downlink_buffer, n_uplink_buffer, n_log);
     });
 
-    log_tx.send(Log {
+    log_tx.try_send(Log {
         source: LogSource::Main,
         event: Event {
             task_id: TaskID::GlobalSystem,
@@ -91,10 +91,10 @@ fn main() {
     state.cpu_active_ms.fetch_add(state.uptime_ms() - now, Ordering::SeqCst);
 
     while state.is_running.load(Ordering::SeqCst) {
-        thread::sleep(Duration::from_millis(MAIN_MS));
+        thread::sleep(Duration::from_micros(MAIN_MS));
     }
 
-    log_tx.send(Log {
+    log_tx.try_send(Log {
         source: LogSource::Main,
         event: Event {
             task_id: TaskID::GlobalSystem,

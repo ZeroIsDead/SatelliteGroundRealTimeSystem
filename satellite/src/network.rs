@@ -1,7 +1,7 @@
 use std::sync::mpsc::{SyncSender};
 use std::time::{Duration};
 use crate::types::{SatelliteMessage, TelemetryPacket, Log, *};
-use crate::config::{SEQUENCE_NOT_CONFIRMED, PACKET_HISTORY_BUFFER_CAPACITY, INIT_HANDSHAKE_LIMIT_MS, NETWORK_MS, NETWORK_PORT, NETWORK_PRIORITY, VISIBILITY_WINDOW_LIMIT_MS};
+use crate::config::{INIT_HANDSHAKE_LIMIT_MS, NETWORK_MS, NETWORK_PORT, NETWORK_PRIORITY, NETWORK_READ_TIMEOUT, NETWORK_WRITE_TIMEOUT, PACKET_HISTORY_BUFFER_CAPACITY, SEQUENCE_NOT_CONFIRMED, VISIBILITY_WINDOW_LIMIT_MS};
 use std::net::TcpStream;
 use std::io::{Read, Write};
 use std::thread;
@@ -21,7 +21,7 @@ pub fn run_network_thread(
     set_current_thread_priority(ThreadPriority::Crossplatform(NETWORK_PRIORITY.try_into().unwrap())).unwrap();
     let mut was_visible = false;
 
-    let mut history: [Option<TelemetryPacket>; PACKET_HISTORY_BUFFER_CAPACITY] = [None; PACKET_HISTORY_BUFFER_CAPACITY]; // Fixed size array = no heap allocation jitter!
+    let mut history: Vec<Option<TelemetryPacket>> = vec![None; PACKET_HISTORY_BUFFER_CAPACITY]; // Fixed size array = no heap allocation jitter
     let mut history_idx = 0;
 
     while state.is_running.load(Ordering::SeqCst) {
@@ -30,50 +30,53 @@ pub fn run_network_thread(
         if is_visible && !was_visible {
             let pass_start = state.uptime_ms();
             
-            if let Ok(mut stream) = TcpStream::connect_timeout(&NETWORK_PORT.parse().unwrap(), Duration::from_millis(INIT_HANDSHAKE_LIMIT_MS)) {
-                let _ = stream.set_write_timeout(Some(Duration::from_millis(10)));
-                let _ = stream.set_read_timeout(Some(Duration::from_millis(1)));
+            if let Ok(mut stream) = TcpStream::connect_timeout(&NETWORK_PORT.parse().unwrap(), Duration::from_micros(INIT_HANDSHAKE_LIMIT_MS)) {
+                let _ = stream.set_write_timeout(Some(Duration::from_micros(NETWORK_WRITE_TIMEOUT)));
+                let _ = stream.set_read_timeout(Some(Duration::from_micros(NETWORK_READ_TIMEOUT)));
                 let mut length_buf = [0u8; 2];
+
+                let _ = log_tx.try_send(Log {
+                    source: LogSource::Network,
+                    event: Event {
+                        task_id: TaskID::NetworkService,
+                        event_id: EventID::ConnectionStart,
+                        data: EventData::None,
+                        timestamp: state.uptime_ms(),
+                    }
+                });
 
                 while state.uptime_ms() - pass_start < VISIBILITY_WINDOW_LIMIT_MS {
                     
                     if let Some(packet) = downlink_buffer.pop() {
-                        let queue_latency_ms = (state.uptime_ms() - packet.creation_time) as u32;
-                        let queue_jitter_ms = downlink_buffer.metrics.last_latency_ms.load(Ordering::Relaxed) - queue_latency_ms;
+                        let queue_latency_ms = state.uptime_ms() - packet.creation_time;
+                        downlink_buffer.metrics.insert_new_metric(queue_latency_ms);
 
-                        let current_sequence_no = state.packet_sequence_no.load(Ordering::SeqCst);
-                      
-                        downlink_buffer.push_and_log(LogSource::Network, 
-                            TelemetryPacket{
-                            priority: packet.priority,
-                            creation_time: state.get_synchronized_timestamp(),
-                            payload: SatelliteMessage::Telemetry {
+                        let _ = log_tx.try_send(Log { 
+                                source: LogSource::Network, 
                                 event: Event {
                                     task_id: TaskID::NetworkService,
                                     event_id: EventID::QueuePerformance,
                                     data: EventData::QueuePerformance {
                                         latency_ms: queue_latency_ms,
-                                        jitter_ms: queue_jitter_ms,
+                                        average_latency_ms: downlink_buffer.metrics.get_average_latency(),
+                                        jitter_ms: downlink_buffer.metrics.get_jitter(),
                                         buffer_fill_rate: state.buffer_fill_rate.load(Ordering::Relaxed),
+                                        sample_count: downlink_buffer.metrics.number_of_samples.load(Ordering::Relaxed)
                                     },
                                     timestamp: state.uptime_ms(),
                                 },
-                            },
-                            sequence_no: current_sequence_no,
-                        },
-                        &state, &log_tx, &downlink_buffer);
+                            });
 
-                        downlink_buffer.metrics.last_latency_ms.store(queue_latency_ms, Ordering::Relaxed);
-                        downlink_buffer.metrics.jitter_ms.store(queue_jitter_ms, Ordering::Relaxed);
-                    
                         let outgoing_telemetry = TelemetryPacket {
                             priority: packet.priority,
                             creation_time: state.uptime_ms(),
                             payload: packet.payload,
-                            sequence_no: state.packet_sequence_no.load(Ordering::SeqCst),
+                            sequence_no: if packet.sequence_no == SEQUENCE_NOT_CONFIRMED {
+                               state.packet_sequence_no.fetch_add(1, Ordering::SeqCst)
+                            } else {
+                                packet.sequence_no
+                            },
                         };
-
-                        state.packet_sequence_no.fetch_add(1, Ordering::SeqCst);
 
                         history[history_idx] = Some(outgoing_telemetry);
                         history_idx = (history_idx + 1) % PACKET_HISTORY_BUFFER_CAPACITY;
@@ -107,6 +110,19 @@ pub fn run_network_thread(
 
                     let network_arrival_time = state.uptime_ms();
                     if let Ok(packet) = bincode::deserialize::<TelemetryPacket>(&&payload_buf) {
+                        eprintln!("[DEBUG] Received packet: priority={:?} event={:?} task={:?}", 
+                            packet.priority, 
+                            match packet.payload {
+                                SatelliteMessage::Telemetry { event } => format!("{:?}", event.event_id),
+                                SatelliteMessage::Command { command, .. } => format!("Command {:?}", command),
+                                _ => "non-telemetry".to_string()
+                            },
+                            match packet.payload {
+                                SatelliteMessage::Telemetry { event } => format!("{:?}", event.task_id),
+                                _ => "-".to_string()
+                            }
+                        );
+
                         let incoming_telemetry = TelemetryPacket {
                             priority: packet.priority,
                             creation_time: network_arrival_time,
@@ -114,7 +130,7 @@ pub fn run_network_thread(
                             sequence_no: packet.sequence_no,
                         };
 
-                        let found = match packet.payload {
+                        match packet.payload {
                             SatelliteMessage::SyncRequest => {
                                 let current_sequence_no = state.packet_sequence_no.load(Ordering::SeqCst);
 
@@ -133,7 +149,7 @@ pub fn run_network_thread(
                                 state.packet_sequence_no.fetch_add(1, Ordering::SeqCst);
 
                                 if state.clock_sync.is_calibrated.load(Ordering::SeqCst) {
-                                    let _ = log_tx.send(Log {
+                                    let _ = log_tx.try_send(Log {
                                         source: LogSource::Network,
                                         event: Event {
                                             task_id: TaskID::NetworkService,
@@ -145,8 +161,6 @@ pub fn run_network_thread(
 
                                     state.clock_sync.is_calibrated.store(false, Ordering::SeqCst);
                                 }
-
-                                true
                             },
                             SatelliteMessage::SyncResult { offset} => {
                                 state.clock_sync.total_offset_ms.fetch_add(offset, Ordering::Relaxed);
@@ -156,9 +170,19 @@ pub fn run_network_thread(
 
                                 state.clock_sync.average_offset_ms.store(average, Ordering::Relaxed);
 
+                                let _ = log_tx.try_send(Log {
+                                        source: LogSource::Network,
+                                        event: Event {
+                                            task_id: TaskID::NetworkService,
+                                            event_id: EventID::SyncOngoing,
+                                            data: EventData::TimeSync { offset: offset },
+                                            timestamp: network_arrival_time,
+                                        }
+                                    });
+
                                 if state.clock_sync.number_of_sample.load(Ordering::Relaxed) % 10 == 0 { // 10 Packets = Synced
                                     state.clock_sync.is_calibrated.store(true, Ordering::SeqCst);
-                                    let _ = log_tx.send(Log {
+                                    let _ = log_tx.try_send(Log {
                                         source: LogSource::Network,
                                         event: Event {
                                             task_id: TaskID::NetworkService,
@@ -169,7 +193,6 @@ pub fn run_network_thread(
                                     });
                                 }
 
-                                true
                             }
                             SatelliteMessage::Command { command, sent_at: _} => {
                                 if let Command::RequestRetransmit { sequence_no } = command {
@@ -207,25 +230,31 @@ pub fn run_network_thread(
 
                                         downlink_buffer.push_and_log(LogSource::Network, outgoing_history_packet, &state, &log_tx, &downlink_buffer);
                                         }
+                                } else {
+                                    uplink_buffer.push_and_log(LogSource::Network, incoming_telemetry, &state, &log_tx, &downlink_buffer);
                                 }
                                 
-                                true
                             }
-                            _ => false
+                            _ => {}
                         };
-
-
-                        if found {
-                            continue;
-                        }
-
-                        uplink_buffer.push_and_log(LogSource::Network, incoming_telemetry, &state, &log_tx, &downlink_buffer);
+                        
                     }
                 }
+
+                let _ = log_tx.try_send(Log {
+                    source: LogSource::Network,
+                    event: Event {
+                        task_id: TaskID::NetworkService,
+                        event_id: EventID::ConnectionEnd,
+                        data: EventData::None,
+                        timestamp: state.uptime_ms(),
+                    }
+                });
+
             } else {
                 downlink_buffer.push_and_log(LogSource::Network, 
                     TelemetryPacket{
-                    priority: Priority::Critical,
+                    priority: Priority::Normal,
                     creation_time: state.get_synchronized_timestamp(),
                     payload: SatelliteMessage::Telemetry {
                             event: Event {
@@ -245,7 +274,7 @@ pub fn run_network_thread(
 
 
         was_visible = is_visible;
-        thread::sleep(Duration::from_millis(NETWORK_MS)); // Polling interval
+        thread::sleep(Duration::from_micros(NETWORK_MS)); // Polling interval
     }
 }
 

@@ -1,83 +1,129 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use crate::config::TELEMETRY_RATE_MS;
-use crate::types::Command;
+use std::sync::Mutex;
+use std::time::Instant;
+use crate::types::{Metrics, SubsystemID, Command, Priority};
+use crate::config::{MAX_SUBSYSTEM, TICK_RATE};
 
-pub struct GcsState {
-    pub is_running: AtomicBool,
-    pub interlocks: InterlockManager,
-    pub metrics: PerformanceMetrics,
+#[derive(Debug)]
+pub struct SyncState {
+    pub is_calibrated: AtomicBool,
+    pub last_sent_at: AtomicU64,
 }
 
-impl GcsState {
+#[derive(Debug)]
+pub struct LinkState {
+    pub last_packet_sequence: AtomicU32,
+    pub consecutive_missing: AtomicU32,
+    pub last_packet_time: AtomicU64,
+    pub windows_since_sync: AtomicU32,
+}
+
+#[derive(Debug)]
+pub struct SubsystemInterlockState {
+    pub id: SubsystemID,
+    pub interlock: AtomicBool,
+    pub fault_detected_at: AtomicU64,
+    pub alert_sent: AtomicBool,
+}
+
+impl SubsystemInterlockState {
+    pub fn clear(&self) {
+        self.interlock.store(false, Ordering::Release);
+        self.fault_detected_at.store(0, Ordering::Release);
+        self.alert_sent.store(false, Ordering::Release);
+    }
+}
+
+#[derive(Debug)]
+pub struct ScheduledCommand {
+    pub command: Command,
+    pub priority: Priority,
+    pub interval_ms: u64,
+    pub next_send_time: AtomicU64, 
+    pub enabled: AtomicBool,
+}
+
+#[derive(Debug)]
+pub struct GroundState {
+    pub is_running: AtomicBool,
+    pub clock_sync: SyncState,
+    pub boot_time: Instant,
+    pub link: LinkState,
+    pub subsystem_health: [SubsystemInterlockState; MAX_SUBSYSTEM],
+    pub command_schedule: Mutex<Vec<ScheduledCommand>>,
+    pub cpu_active_ms: AtomicU64,
+    pub buffer_fill_rate: AtomicU32,
+    pub command_dispatch_latency: Metrics,
+    pub telemetry_reception_latency: Metrics,
+}
+
+impl GroundState {
     pub fn new() -> Self {
         Self {
             is_running: AtomicBool::new(true),
-            interlocks: InterlockManager::new(),
-            metrics: PerformanceMetrics::new(),
+            clock_sync: SyncState {
+                is_calibrated: AtomicBool::new(false),
+                last_sent_at: AtomicU64::new(0),
+            },
+            boot_time: Instant::now(),
+            link: LinkState {
+                last_packet_sequence: AtomicU32::new(0),
+                consecutive_missing: AtomicU32::new(0),
+                last_packet_time: AtomicU64::new(0),
+                windows_since_sync: AtomicU32::new(0),
+            },
+            subsystem_health: [
+                SubsystemInterlockState {
+                    id: SubsystemID::Antenna,
+                    interlock: AtomicBool::new(false),
+                    fault_detected_at: AtomicU64::new(0),
+                    alert_sent: AtomicBool::new(false),
+                },
+                SubsystemInterlockState {
+                    id: SubsystemID::Power,
+                    interlock: AtomicBool::new(false),
+                    fault_detected_at: AtomicU64::new(0),
+                    alert_sent: AtomicBool::new(false),
+                },
+            ],
+            command_schedule: Mutex::new(vec![
+                ScheduledCommand {
+                    command: Command::RotateAntenna { target_angle: 9000 },
+                    priority: Priority::Normal,
+                    interval_ms: 30 * TICK_RATE,
+                    next_send_time: AtomicU64::new(0),
+                    enabled: AtomicBool::new(true),
+                },
+                ScheduledCommand {
+                    command: Command::SetPowerMode { mode: 1 },
+                    priority: Priority::Normal,
+                    interval_ms: 60 * TICK_RATE,
+                    next_send_time: AtomicU64::new(0),
+                    enabled: AtomicBool::new(true),
+                },
+            ]),
+            cpu_active_ms: AtomicU64::new(0),
+            buffer_fill_rate: AtomicU32::new(0),
+            command_dispatch_latency: Metrics {
+                last_latency_ms: AtomicU64::new(0),
+                total_latency_ms: AtomicU64::new(0),
+                total_jitter_ms: AtomicU64::new(0),
+                number_of_samples: AtomicU32::new(0),
+            },
+            telemetry_reception_latency: Metrics {
+                last_latency_ms: AtomicU64::new(0),
+                total_latency_ms: AtomicU64::new(0),
+                total_jitter_ms: AtomicU64::new(0),
+                number_of_samples: AtomicU32::new(0),
+            },
         }
     }
-}
 
-pub struct InterlockManager {
-    antenna_locked: AtomicBool,
-    loss_of_contact: AtomicBool,
-}
-
-impl InterlockManager {
-    fn new() -> Self {
-        Self {
-            antenna_locked: AtomicBool::new(false),
-            loss_of_contact: AtomicBool::new(false),
-        }
+    pub fn uptime_ms(&self) -> u64 {
+        self.boot_time.elapsed().as_micros() as u64
     }
 
-    pub fn is_command_safe(&self, cmd: &Command) -> bool {
-        // [cite: 129, 140]
-        if self.loss_of_contact.load(Ordering::SeqCst) { return false; }
-        match cmd {
-            Command::RotateAntenna { .. } => !self.antenna_locked.load(Ordering::SeqCst),
-            _ => true,
-        }
+    pub fn find_subsystem(&self, id: SubsystemID) -> Option<&SubsystemInterlockState> {
+        self.subsystem_health.iter().find(|s| s.id == id)
     }
-
-    pub fn set_subsystem_lock(&self, _id: u8, state: bool) {
-        self.antenna_locked.store(state, Ordering::SeqCst);
-    }
-
-    pub fn set_loss_of_contact(&self, state: bool) {
-        self.loss_of_contact.store(state, Ordering::SeqCst);
-    }
-}
-
-pub struct PerformanceMetrics {
-    packets_received: AtomicU32,
-    missed_deadlines: AtomicU32,
-    highest_seq: AtomicU32,
-    first_packet_time: AtomicU64,
-}
-
-impl PerformanceMetrics {
-    fn new() -> Self {
-        Self {
-            packets_received: AtomicU32::new(0),
-            missed_deadlines: AtomicU32::new(0),
-            highest_seq: AtomicU32::new(0),
-            first_packet_time: AtomicU64::new(0),
-        }
-    }
-
-    pub fn calculate_jitter(&self, seq: u32, current_time: u64) -> i64 {
-        // [cite: 153]
-        let start_anchor = self.first_packet_time.load(Ordering::Relaxed);
-        if start_anchor == 0 {
-            self.first_packet_time.store(current_time, Ordering::Relaxed);
-            return 0;
-        }
-        let expected = start_anchor + (seq as u64 * TELEMETRY_RATE_MS);
-        (current_time as i64) - (expected as i64)
-    }
-
-    pub fn increment_received(&self) { self.packets_received.fetch_add(1, Ordering::Relaxed); }
-    pub fn record_deadline_miss(&self) { self.missed_deadlines.fetch_add(1, Ordering::Relaxed); }
-    pub fn update_highest_seq(&self, seq: u32) { self.highest_seq.fetch_max(seq, Ordering::Relaxed); }
 }

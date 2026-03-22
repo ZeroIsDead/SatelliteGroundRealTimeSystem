@@ -1,7 +1,7 @@
 use std::{collections::BinaryHeap, sync::mpsc::SyncSender};
 use std::sync::{Mutex, Arc};
 use crate::{state::SatelliteState, types::{TaskID, EventID, Log, Event,SatelliteMessage, LogSource, EventData, Metrics, Priority, TelemetryPacket}};
-use std::sync::atomic::{AtomicU32};
+use std::sync::atomic::{AtomicU32, AtomicU64};
 use crate::config::{SEQUENCE_NOT_CONFIRMED};
 
 pub struct BoundedBuffer {
@@ -16,8 +16,10 @@ impl BoundedBuffer {
             heap: Mutex::new(BinaryHeap::with_capacity(capacity)),
             capacity: capacity,
             metrics: Metrics {
-                last_latency_ms: AtomicU32::new(0),
-                jitter_ms: AtomicU32::new(0),
+                last_latency_ms: AtomicU64::new(0),
+                total_latency_ms: AtomicU64::new(0),
+                total_jitter_ms: AtomicU64::new(0),
+                number_of_samples: AtomicU32::new(0),
             }
         }
     }
@@ -52,11 +54,12 @@ impl BoundedBuffer {
         }
     }
 
+    // downlink_buffer and self could be the same pointer
     pub fn push_and_log(&self, source: LogSource, item: TelemetryPacket, state: &Arc<SatelliteState>, log_tx: &SyncSender<Log>, downlink_buffer: &Arc<BoundedBuffer>) {
         if let Some(dropped) = &self.push(item) { // Buffer Drop Packet Logic
             let task_id: TaskID = match dropped.payload {
                 SatelliteMessage::Telemetry{event} => {
-                    let _ = log_tx.send(Log {
+                    let _ = log_tx.try_send(Log {
                         source: source,
                         event: event,
                     });
@@ -66,7 +69,7 @@ impl BoundedBuffer {
                 _ => TaskID::NetworkService
             };
 
-            let _ = log_tx.send(Log {
+            let _ = log_tx.try_send(Log {
                 source: source,
                 event: Event {
                     task_id: task_id,
@@ -89,6 +92,10 @@ impl BoundedBuffer {
                 }, 
                 sequence_no: SEQUENCE_NOT_CONFIRMED, 
             });
+        } else {
+            if let SatelliteMessage::Telemetry { event } = item.payload {
+                let _ = log_tx.try_send(Log { source, event });
+            }
         }
     }
 

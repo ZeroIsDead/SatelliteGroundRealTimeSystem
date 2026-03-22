@@ -1,21 +1,23 @@
-pub const TICK_RATE: u64 = 1; // 1ms
+pub const TICK_RATE: u64 = 1000; // 1ms
 pub const SENSOR_FAULT_NOT_CONFIRMED: u16 = 0; // SENSOR FAULT TYPE NOT SET
 pub const SEQUENCE_NOT_CONFIRMED: u32 = 0; // SEQUENCE_NO is only set in network thread so any other thread will set as NOT_CONFIRMED
 pub const TIMESTAMP_NOT_CONFIRMED: u64 = 0; // FAULT TIMESTAMP NOT YET SET
 
-pub const DATA_BUFFER_CAPACITY: usize = 256; // 1 Byte
-pub const LOG_BUFFER_CAPACITY: usize = 256; // 1 Byte
+pub const DATA_BUFFER_CAPACITY: usize = 5120; // 12 Bits
+pub const LOG_BUFFER_CAPACITY: usize = 5120; // 12 Bits
 pub const PACKET_HISTORY_BUFFER_CAPACITY: usize = 1024; // 10 Bits
 pub const NORMAL_TO_DEGRADED_THRESHOLD: u32 = 80; // 80%
 pub const DEGRADED_TO_NORMAL_THRESHOLD: u32 = 50; // 50%
-pub const NETWORK_PORT: &str = "0.0.0.0:8000";
+pub const NETWORK_PORT: &str = "127.0.0.1:8000";
+pub const NETWORK_READ_TIMEOUT: u64 = 100;
+pub const NETWORK_WRITE_TIMEOUT: u64 = 2 * TICK_RATE;
 
 pub const MAX_SENSORS: usize = 3;
 pub const MAX_SUBSYSTEM: usize = 2;
 
-// Frequencies (in Milliseconds)
-pub const SUBSYSTEM_FAULT_INJECTION_MS: u64 = 60 * TICK_RATE;
-pub const SENSOR_FAULT_INJECTION_MS: u64 = 60 * TICK_RATE;
+// Frequencies (in Microseconds)
+pub const SUBSYSTEM_FAULT_INJECTION_MS: u64 = 600 * TICK_RATE;
+pub const SENSOR_FAULT_INJECTION_MS: u64 = 600 * TICK_RATE;
 pub const SENSOR_FAULT_MS: u64 = 10 * TICK_RATE;
 pub const SENSOR_DELAY_MS: u64 = 2 * TICK_RATE;
 pub const SENSOR_DATA_CORRUPTION: u32 = 99999;

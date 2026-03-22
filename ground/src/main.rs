@@ -1,71 +1,77 @@
 mod config;
+mod logging;
+mod network;
+mod monitor;
 mod types;
 mod state;
-mod network;
-mod scheduler;
-mod logger;
+mod buffer;
+mod command;
 
-use std::net::TcpStream;
-use std::sync::{Arc, mpsc::sync_channel};
-use std::thread;
-use std::time::{Instant, Duration};
+use std::sync::{Arc, mpsc};
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::thread;
 
-use crate::types::Command;
-use crate::config::*;
-// use crate::state::GcsState;
+use crate::types::*;
+use crate::state::GroundState;
+use crate::buffer::BoundedBuffer;
+use crate::logging::run_logger;
+use crate::network::run_network_thread;
+use crate::monitor::run_fault_monitor;
+use crate::command::run_command_scheduler;
+use crate::config::{UPLINK_BUFFER_CAPACITY, LOG_BUFFER_CAPACITY, MAIN_MS};
 
 fn main() {
-    println!("--- GCS INITIALIZING ---");
-    let gcs_boot_time = Instant::now();
+    let state = Arc::new(GroundState::new());
+    let uplink_buffer = Arc::new(BoundedBuffer::new(UPLINK_BUFFER_CAPACITY));
+    let (log_tx, log_rx) = mpsc::sync_channel::<Log>(LOG_BUFFER_CAPACITY);
+    let now = state.uptime_ms();
 
-    let state = Arc::new(GcsState::new());
-    let (log_tx, log_rx) = sync_channel(LOG_CHANNEL_CAPACITY);
-    let (cmd_tx, cmd_rx) = sync_channel(CMD_QUEUE_CAPACITY);
+    let logger_handle = thread::spawn(move || {
+        run_logger(log_rx);
+    });
 
-    // Spawn Logger
-    thread::spawn(move || logger::run_gcs_logger(log_rx));
+    let m_state = Arc::clone(&state);
+    let m_buffer = Arc::clone(&uplink_buffer);
+    let m_log = log_tx.clone();
+    thread::spawn(move || { run_fault_monitor(m_state, m_buffer, m_log); });
 
-    // Connect to Satellite
-    let address = format!("{}:{}", SAT_IP, SAT_PORT);
-    let stream = TcpStream::connect(&address).expect("FATAL: Could not connect to Satellite");
-    
-    // Spawn Network Thread
-    let rx_stream = stream.try_clone().unwrap();
-    let state_net = Arc::clone(&state);
-    let log_tx_net = log_tx.clone();
-    thread::spawn(move || network::run_telemetry_listener(rx_stream, state_net, log_tx_net, gcs_boot_time));
+    let c_state = Arc::clone(&state);
+    let c_buffer = Arc::clone(&uplink_buffer);
+    let c_log = log_tx.clone();
+    thread::spawn(move || { run_command_scheduler(c_state, c_buffer, c_log); });
 
-    // Spawn Scheduler Thread
-    let tx_stream = stream.try_clone().unwrap();
-    let state_sched = Arc::clone(&state);
-    let log_tx_sched = log_tx.clone();
-    thread::spawn(move || scheduler::run_command_scheduler(tx_stream, cmd_rx, state_sched, log_tx_sched, gcs_boot_time));
+    let n_state = Arc::clone(&state);
+    let n_buffer = Arc::clone(&uplink_buffer);
+    let n_log = log_tx.clone();
+    thread::spawn(move || { run_network_thread(n_state, n_buffer, n_log); });
 
-    // --- AUTOMATED MISSION SEQUENCER ---
-    let mut schedule = vec![
-        (5000, Command::RotateAntenna { target_angle: 90 }),
-        (10000, Command::SetPowerMode { mode: 1 }),
-        (15000, Command::RotateAntenna { target_angle: 180 }),
-    ];
+    log_tx.send(Log {
+        source: LogSource::Main,
+        event: Event {
+            task_id: TaskID::GlobalSystem,
+            event_id: EventID::Startup,
+            data: EventData::None,
+            timestamp: state.uptime_ms(),
+        },
+    }).ok();
 
-    while gcs_boot_time.elapsed().as_millis() < MISSION_DURATION_MS as u128 {
-        let current_ms = gcs_boot_time.elapsed().as_millis() as u64;
+    state.cpu_active_ms.fetch_add(state.uptime_ms() - now, Ordering::SeqCst);
 
-        schedule.retain(|(time, cmd)| {
-            if current_ms >= *time {
-                let _ = cmd_tx.send(cmd.clone());
-                false // dispatch and remove
-            } else {
-                true // keep waiting
-            }
-        });
-
-        if !state.is_running.load(Ordering::Relaxed) { break; }
-        thread::sleep(Duration::from_millis(10));
+    while state.is_running.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_micros(MAIN_MS));
     }
 
-    println!("[Mission] Complete. Shutting down.");
-    state.is_running.store(false, Ordering::Relaxed);
-    thread::sleep(Duration::from_millis(500)); // allow logs to flush
+    log_tx.send(Log {
+        source: LogSource::Main,
+        event: Event {
+            task_id: TaskID::GlobalSystem,
+            event_id: EventID::Shutdown,
+            data: EventData::None,
+            timestamp: state.uptime_ms(),
+        },
+    }).ok();
+
+    drop(log_tx);
+    logger_handle.join().unwrap();
 }

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{SyncSender};
 use std::thread;
-use crate::config::{COMMAND_MS, COMMAND_PRIORITY, SEQUENCE_NOT_CONFIRMED};
+use crate::config::{COMMAND_MS, COMMAND_PRIORITY, SEQUENCE_NOT_CONFIRMED, TIMESTAMP_NOT_CONFIRMED};
 use thread_priority::*;
 
 pub fn run_command_executor(
@@ -24,8 +24,10 @@ pub fn run_command_executor(
             match packet.payload {
                 SatelliteMessage::Command { command, .. } => {
                     if let Some(requirements) = command.required_health() {
-                        if state.subsystem_health[requirements as usize].fault_interlock.load(Ordering::Acquire) {
-                            break;
+                        let system = &state.subsystem_health[requirements as usize];
+                        if system.fault_interlock.load(Ordering::Acquire) 
+                            || system.fault.load(Ordering::Acquire) {
+                            continue;
                         }
                     }
                     execute_instruction(command, &state, &log_tx, &downlink_buffer);
@@ -36,36 +38,39 @@ pub fn run_command_executor(
             state.cpu_active_ms.fetch_add(state.uptime_ms() - start_time, Ordering::SeqCst);
         }
         
-        thread::sleep(Duration::from_millis(COMMAND_MS));
+        thread::sleep(Duration::from_micros(COMMAND_MS));
     }
 }
 
 fn execute_instruction(command: Command, state: &Arc<SatelliteState>, log_tx: &SyncSender<Log>, downlink_buffer: &Arc<BoundedBuffer>) {
-    let task_id = match command {
+    let (task_id, event_data) = match command {
         Command::ClearSubsystemFault { subsystem_id } => {
             for subsystem in &state.subsystem_health {
                 if subsystem.id == subsystem_id && subsystem.fault.load(Ordering::Acquire) {
                     subsystem.fault_interlock.store(false, Ordering::Release);
+                    subsystem.fault.store(false, Ordering::Release);
+                    subsystem.fault_timestamp.store(TIMESTAMP_NOT_CONFIRMED, Ordering::Release);
+                    subsystem.fault_reported.store(false, Ordering::Release);
                 }
             }
 
-            TaskID::ClearSubsystemFault
+            (TaskID::ClearSubsystemFault, EventData::Subsystem { subsystem_id })
         },
         Command::RotateAntenna { target_angle } => {
             state.subsystem_health[SubsystemID::Antenna as usize].value.store(target_angle as u32, Ordering::Relaxed);
         
-            TaskID::RotateAntenna
+            (TaskID::RotateAntenna, EventData::None)
             
         },
         Command::SetPowerMode { mode } => {
             state.subsystem_health[SubsystemID::Power as usize].value.store(mode as u32, Ordering::Relaxed);
         
-            TaskID::SetPowerMode
+            (TaskID::SetPowerMode, EventData::None)
         },
         _ => {
             
 
-            TaskID::None
+            (TaskID::None, EventData::None)
 
         }
     };
@@ -73,7 +78,7 @@ fn execute_instruction(command: Command, state: &Arc<SatelliteState>, log_tx: &S
     if task_id == TaskID::None {
         downlink_buffer.push_and_log(LogSource::CommandExecutor, 
             TelemetryPacket{
-            priority: Priority::Critical,
+            priority: Priority::Normal,
             creation_time: state.get_synchronized_timestamp(),
             payload: SatelliteMessage::Telemetry {
                     event: Event {
@@ -98,7 +103,7 @@ fn execute_instruction(command: Command, state: &Arc<SatelliteState>, log_tx: &S
                 event: Event {
                     task_id: task_id,
                     event_id: EventID::CommandCompletion,
-                    data: EventData::None,
+                    data: event_data,
                     timestamp: state.uptime_ms(),
                 },
         },

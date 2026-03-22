@@ -53,7 +53,7 @@ pub fn run_logger(log_rx: Receiver<Log>) {
             // Scheduled Task Events
             EventID::StartDelay => "Task Scheduling Drift",
             EventID::CompletionDelay => "Task Completion Delay",
-            EventID::TaskFault => "Task Thread Failed",
+            EventID::TaskFault => "Task Failed",
             EventID::DataCorruption => "Data Corrupted",
             EventID::TaskCompletion => "Task Completed",
 
@@ -69,7 +69,10 @@ pub fn run_logger(log_rx: Receiver<Log>) {
             EventID::DataLoss => "Packet Dropped",
             EventID::RetransmitFailed => "Retransmit Failed",
             EventID::SyncStart => "Time Sync Start",
+            EventID::SyncOngoing => "Time Sync Ongoing",
             EventID::SyncCompleted => "Time Sync Complete",
+            EventID::ConnectionStart => "Connection Start",
+            EventID::ConnectionEnd => "Connection End",
 
             // System Info
             EventID::QueuePerformance => "Queue Performance",  
@@ -79,37 +82,39 @@ pub fn run_logger(log_rx: Receiver<Log>) {
         let _ = write!(format_buffer, "[Satellite] [{:>7}]\tTask: [{:>30}]\tEvent: [{:>30}]\t", source_str, task_str, event_str);
 
         match log.event.data {
-            EventData::QueuePerformance { latency_ms, jitter_ms, buffer_fill_rate } => {
-                let _ = write!(format_buffer, "QUEUE_PERF: [Latency: {}ms, Jitter: {}ms, Buffer Fill Rate: {}%]\t", latency_ms, jitter_ms, buffer_fill_rate);
+            EventData::QueuePerformance { latency_ms, average_latency_ms, jitter_ms, buffer_fill_rate, sample_count } => {
+                let _ = write!(format_buffer, "QUEUE_PERF: [Latency: {}μs, Average Latency: {}μs, Jitter: {}μs, Buffer Fill Rate: {}%, Sample Count: {}]\t", latency_ms, average_latency_ms, jitter_ms, buffer_fill_rate, sample_count);
             }
             EventData::SchedulingDrift { drift_ms  } => {
-                let _ = write!(format_buffer, "DRIFT: [{}ms]\t", drift_ms);
+                let _ = write!(format_buffer, "DRIFT: [{}μs]\t", drift_ms);
             }
-            EventData::Hardware { value } => {
-                let _ = write!(format_buffer, "VALUE: [{}]\t", value as f32 / 100 as f32); // Sensor Data Stored as Integer -> (Float with 2 Decimal Places)
+            EventData::Hardware { value, latency_ms, average_latency_ms, jitter_ms, sample_count } => {
+                let _ = write!(format_buffer, "HARDWARE: [Value: {}, Latency: {}μs, Average Latency: {}μs, Jitter: {}μs, Sample Count: {}]\t", (value / 100) as f32,  latency_ms, average_latency_ms, jitter_ms, sample_count); // Sensor Data Stored as Integer -> (Float with 2 Decimal Places)
             }
-            EventData::SubsystemFault { subsystem_id }=> {
+            EventData::CorruptedHardware { value, recovery_time } => {
+let _ = write!(format_buffer, "CORRUPTED_HARDWARE: [Value: {}, Recovery Time: {}μs]\t", (value / 100) as f32, recovery_time); // Sensor Data Stored as Integer -> (Float with 2 Decimal Places)
+            }
+            EventData::Subsystem { subsystem_id } => {
                 let _ = write!(format_buffer, "SUBSYSTEM: [{}]\t", match subsystem_id {
                     SubsystemID::Antenna => "Antenna",
                     SubsystemID::Power => "Power",
                 });
             }
             EventData::SystemStats { active_ms, inactive_ms } => {
-                let _ = write!(format_buffer, "CPU: Active: [{}ms, Inactive: {}ms]\t", active_ms, inactive_ms);
-
+                let _ = write!(format_buffer, "CPU: Active: [{}μs, Inactive: {}μs]\t", active_ms, inactive_ms);
             }
             EventData::FaultRecovery { recovery_time } => {
-                let _ = write!(format_buffer, "RECOVERY TIME: [{}ms]\t", recovery_time);
+                let _ = write!(format_buffer, "RECOVERY TIME: [{}μs]\t", recovery_time);
             }
             EventData::TimeSync { offset } => {
-                let _ = write!(format_buffer, "OFFSET: [{}ms]\t", offset);
+                let _ = write!(format_buffer, "OFFSET: [{}μs]\t", offset);
             }
             EventData::None => {}
         }
 
-        let _ = write!(format_buffer, "Time: [{} uptime ms]\t", log.event.timestamp);
+        let _ = write!(format_buffer, "Event Timestamp: [{} uptime μs]\t", log.event.timestamp);
 
-        println!("{}", format_buffer);
+        // println!("{}", format_buffer);
 
         if let Err(e) = writeln!(file, "{}", format_buffer) {
             eprintln!("Failed to write to disk: {}", e);
