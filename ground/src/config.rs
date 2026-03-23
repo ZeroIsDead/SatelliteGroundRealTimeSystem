@@ -9,7 +9,7 @@ pub const PACKET_HISTORY_BUFFER_CAPACITY: usize = 1024;
 
 pub const UPLINK_BUFFER_CAPACITY: usize = 64;
 
-pub const LOG_BUFFER_CAPACITY: usize = 8192;
+pub const LOG_BUFFER_CAPACITY: usize = 1024;
 
 pub const VISIBILITY_WINDOW_LIMIT_MS: u64 = 30 * TICK_RATE;
 

@@ -24,7 +24,7 @@ impl BoundedBuffer {
         }
     }
 
-    fn push(&self, item: TelemetryPacket) -> Option<TelemetryPacket> {
+    pub fn push(&self, item: TelemetryPacket) -> Option<TelemetryPacket> {
         let mut heap = self.heap.lock().unwrap();
 
         if heap.len() < self.capacity {
@@ -106,5 +106,10 @@ impl BoundedBuffer {
     
     pub fn len(&self) -> usize {
         self.heap.lock().unwrap().len()
+    }
+
+    pub fn clear(&self) {
+        let mut heap = self.heap.lock().unwrap();
+        heap.clear();
     }
 }

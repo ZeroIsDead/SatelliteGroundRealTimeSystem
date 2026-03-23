@@ -110,19 +110,6 @@ pub fn run_network_thread(
 
                     let network_arrival_time = state.uptime_ms();
                     if let Ok(packet) = bincode::deserialize::<TelemetryPacket>(&&payload_buf) {
-                        eprintln!("[DEBUG] Received packet: priority={:?} event={:?} task={:?}", 
-                            packet.priority, 
-                            match packet.payload {
-                                SatelliteMessage::Telemetry { event } => format!("{:?}", event.event_id),
-                                SatelliteMessage::Command { command, .. } => format!("Command {:?}", command),
-                                _ => "non-telemetry".to_string()
-                            },
-                            match packet.payload {
-                                SatelliteMessage::Telemetry { event } => format!("{:?}", event.task_id),
-                                _ => "-".to_string()
-                            }
-                        );
-
                         let incoming_telemetry = TelemetryPacket {
                             priority: packet.priority,
                             creation_time: network_arrival_time,

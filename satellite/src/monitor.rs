@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{SyncSender};
 use std::thread;
-use crate::config::{DEGRADED_TO_NORMAL_THRESHOLD, FAULT_RECOVERY_MS, MONITOR_MS, MONITOR_PRIORITY, NORMAL_TO_DEGRADED_THRESHOLD, SEQUENCE_NOT_CONFIRMED, NUMBER_OF_CORES, SENSOR_FAULT_NOT_CONFIRMED, TIMESTAMP_NOT_CONFIRMED};
+use crate::config::{NETWORK_MS, VISIBILITY_WINDOW_CYCLE_MS, DEGRADED_TO_NORMAL_THRESHOLD, FAULT_RECOVERY_MS, MONITOR_MS, MONITOR_PRIORITY, NORMAL_TO_DEGRADED_THRESHOLD, SEQUENCE_NOT_CONFIRMED, NUMBER_OF_CORES, SENSOR_FAULT_NOT_CONFIRMED, TIMESTAMP_NOT_CONFIRMED};
 use thread_priority::*;
 
 pub fn run_health_monitor(
@@ -47,23 +47,7 @@ pub fn run_health_monitor(
                     });
 
                     if recovery_time > FAULT_RECOVERY_MS && fault_timestamp != TIMESTAMP_NOT_CONFIRMED {
-                        downlink_buffer.push_and_log(LogSource::HealthMonitor, 
-                            TelemetryPacket{
-                            priority: Priority::Emergency,
-                            creation_time: state.get_synchronized_timestamp(),
-                            payload: SatelliteMessage::Telemetry {
-                                    event: Event {
-                                        task_id: sensor.task_id,
-                                        event_id: EventID::MissionAbort,
-                                        data: EventData::FaultRecovery { recovery_time: recovery_time },
-                                        timestamp: now,
-                                    },
-                            },
-                            sequence_no: SEQUENCE_NOT_CONFIRMED,
-                        }, 
-                        &state, &log_tx, &downlink_buffer);
-
-                        state.is_running.store(false, Ordering::SeqCst);
+                        transmit_mission_abort_and_shutdown(&state, &downlink_buffer, &log_tx, recovery_time, now);
                     }
 
                     // RESET FAULTS
@@ -110,23 +94,7 @@ pub fn run_health_monitor(
                 }
 
                 if recovery_time > FAULT_RECOVERY_MS && fault_timestamp != TIMESTAMP_NOT_CONFIRMED {
-                    downlink_buffer.push_and_log(LogSource::HealthMonitor, 
-                        TelemetryPacket{
-                        priority: Priority::Emergency,
-                        creation_time: state.get_synchronized_timestamp(),
-                        payload: SatelliteMessage::Telemetry {
-                                event: Event {
-                                    task_id: TaskID::GlobalSystem,
-                                    event_id: EventID::MissionAbort,
-                                    data: EventData::FaultRecovery { recovery_time: recovery_time },
-                                    timestamp: now,
-                                },
-                        },
-                        sequence_no: SEQUENCE_NOT_CONFIRMED,
-                    }, 
-                    &state, &log_tx, &downlink_buffer);
-
-                    state.is_running.store(false, Ordering::SeqCst);
+                    transmit_mission_abort_and_shutdown(&state, &downlink_buffer, &log_tx, recovery_time, now);
                 }
             }
         }
@@ -215,4 +183,56 @@ pub fn run_health_monitor(
 
         thread::sleep(Duration::from_micros(MONITOR_MS));
     }
+}
+
+pub fn transmit_mission_abort_and_shutdown(
+    state: &Arc<SatelliteState>,
+    downlink_buffer: &Arc<BoundedBuffer>,
+    log_tx: &SyncSender<Log>,
+    recovery_time: u64,
+    now: u64,
+) {
+    downlink_buffer.clear(); // Clear all Queued Messages
+
+    downlink_buffer.push_and_log(LogSource::HealthMonitor, // Mission Abort
+        TelemetryPacket{
+        priority: Priority::Emergency,
+        creation_time: state.get_synchronized_timestamp(),
+        payload: SatelliteMessage::Telemetry {
+                event: Event {
+                    task_id: TaskID::GlobalSystem,
+                    event_id: EventID::MissionAbort,
+                    data: EventData::FaultRecovery { recovery_time: recovery_time },
+                    timestamp: now,
+                },
+        },
+        sequence_no: SEQUENCE_NOT_CONFIRMED,
+    }, 
+    &state, &log_tx, &downlink_buffer);
+
+    let wait_start = state.uptime_ms();
+    let timeout = VISIBILITY_WINDOW_CYCLE_MS * 2;
+
+    while downlink_buffer.len() > 0 {
+        downlink_buffer.push(TelemetryPacket{ // Sends more of MissionAbort if the previous one was lost
+            priority: Priority::Emergency,
+            creation_time: state.get_synchronized_timestamp(),
+            payload: SatelliteMessage::Telemetry {
+                    event: Event {
+                        task_id: TaskID::GlobalSystem,
+                        event_id: EventID::MissionAbort,
+                        data: EventData::FaultRecovery { recovery_time: recovery_time },
+                        timestamp: now,
+                    },
+            },
+            sequence_no: SEQUENCE_NOT_CONFIRMED,
+        });
+
+        if state.uptime_ms() - wait_start > timeout {
+            break;
+        }
+        thread::sleep(Duration::from_micros(NETWORK_MS));
+    }
+
+    state.is_running.store(false, Ordering::SeqCst);
 }

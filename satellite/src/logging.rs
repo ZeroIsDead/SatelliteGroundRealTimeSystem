@@ -101,7 +101,7 @@ let _ = write!(format_buffer, "CORRUPTED_HARDWARE: [Value: {}, Recovery Time: {}
                 });
             }
             EventData::SystemStats { active_ms, inactive_ms } => {
-                let _ = write!(format_buffer, "CPU: Active: [{}μs, Inactive: {}μs]\t", active_ms, inactive_ms);
+                let _ = write!(format_buffer, "CPU: [Active: {}μs, Inactive: {}μs]\t", active_ms, inactive_ms);
             }
             EventData::FaultRecovery { recovery_time } => {
                 let _ = write!(format_buffer, "RECOVERY TIME: [{}μs]\t", recovery_time);

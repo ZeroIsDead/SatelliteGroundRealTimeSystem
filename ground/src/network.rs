@@ -242,23 +242,9 @@ fn receive_downlink(
 
     let packet = match bincode::deserialize::<TelemetryPacket>(&payload_buf) {
         Ok(packet) => {
-            eprintln!("[DEBUG] Received packet: priority={:?} event={:?} task={:?}", 
-                packet.priority, 
-                match packet.payload {
-                    SatelliteMessage::Telemetry { event } => format!("{:?}", event.event_id),
-                    SatelliteMessage::Command { command, .. } => format!("Command {:?}", command),
-                    _ => "non-telemetry".to_string()
-                },
-                match packet.payload {
-                    SatelliteMessage::Telemetry { event } => format!("{:?}", event.task_id),
-                    _ => "-".to_string()
-                }
-            );
-
             packet
         },
-        Err(e) => {
-            eprintln!("[DEBUG] Deserialization failed: {:?} bytes={:?}", e, &payload_buf[..payload_buf.len().min(8)]);
+        Err(_) => {
             return;
         },
     };

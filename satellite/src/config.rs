@@ -3,8 +3,8 @@ pub const SENSOR_FAULT_NOT_CONFIRMED: u16 = 0; // SENSOR FAULT TYPE NOT SET
 pub const SEQUENCE_NOT_CONFIRMED: u32 = 0; // SEQUENCE_NO is only set in network thread so any other thread will set as NOT_CONFIRMED
 pub const TIMESTAMP_NOT_CONFIRMED: u64 = 0; // FAULT TIMESTAMP NOT YET SET
 
-pub const DATA_BUFFER_CAPACITY: usize = 5120; // 12 Bits
-pub const LOG_BUFFER_CAPACITY: usize = 5120; // 12 Bits
+pub const DATA_BUFFER_CAPACITY: usize = 1024; // 10 Bits
+pub const LOG_BUFFER_CAPACITY: usize = 1024; // 10 Bits
 pub const PACKET_HISTORY_BUFFER_CAPACITY: usize = 1024; // 10 Bits
 pub const NORMAL_TO_DEGRADED_THRESHOLD: u32 = 80; // 80%
 pub const DEGRADED_TO_NORMAL_THRESHOLD: u32 = 50; // 50%

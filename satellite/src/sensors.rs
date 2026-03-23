@@ -7,6 +7,7 @@ use crate::config::{FAULT_RECOVERY_MS, SEQUENCE_NOT_CONFIRMED, SENSOR_DELAY_MS, 
 use crate::types::{Event, EventData, EventID, Log, LogSource, Priority, SatelliteMessage, TelemetryPacket};
 use crate::state::SatelliteState;
 use crate::buffer::BoundedBuffer;
+use crate::monitor::transmit_mission_abort_and_shutdown;
 use std::thread;
 use thread_priority::*;
 
@@ -83,23 +84,7 @@ pub fn run_sensor_task(
             &state, &log_tx, &downlink_buffer);
 
             if recovery_time > FAULT_RECOVERY_MS && fault_timestamp != TIMESTAMP_NOT_CONFIRMED {
-                downlink_buffer.push_and_log(LogSource::Sensor, 
-                    TelemetryPacket{
-                    priority: Priority::Emergency,
-                    creation_time: state.get_synchronized_timestamp(),
-                    payload: SatelliteMessage::Telemetry {
-                            event: Event {
-                                task_id: sensor.task_id,
-                                event_id: EventID::MissionAbort,
-                                data: EventData::FaultRecovery { recovery_time: recovery_time },
-                                timestamp: fault_recovery_timestamp,
-                            },
-                    },
-                    sequence_no: SEQUENCE_NOT_CONFIRMED,
-                }, 
-                &state, &log_tx, &downlink_buffer);
-
-                state.is_running.store(false, Ordering::SeqCst);
+                transmit_mission_abort_and_shutdown(&state, &downlink_buffer, &log_tx, recovery_time, fault_recovery_timestamp);
             }
 
             let reset_value = (sensor.min_data + sensor.max_data) / 2;
