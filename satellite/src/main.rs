@@ -148,7 +148,9 @@ pub fn display_summary(state: &SatelliteState, downlink_buffer: &BoundedBuffer, 
 
     println!();
 
-    println!("UPLINK BUFFER METRICS: [{:?}]", uplink_buffer.metrics);
+    println!("UPLINK BUFFER METRICS: [{:?}, Average Jitter: {}, Average Latency: {}]", uplink_buffer.metrics, 
+            uplink_buffer.metrics.get_average_jitter(), 
+            uplink_buffer.metrics.get_average_latency());
     println!("UPLINK BUFFER PACKET DROPPED METRICS: [TOTAL: {}, STALE: {}, EMERGENCY: {}, CRITICAL: {}, NORMAL: {}, LOW: {}]", 
                 uplink_buffer.packet_dropped.load(Ordering::Relaxed), 
                 uplink_buffer.stale_packet_dropped.load(Ordering::Relaxed), 
@@ -160,7 +162,11 @@ pub fn display_summary(state: &SatelliteState, downlink_buffer: &BoundedBuffer, 
 
     println!();
 
-    println!("DOWNLINK BUFFER METRICS: [{:?}, Fill Rate: {}, Packets Sent: {}]", downlink_buffer.metrics, state.buffer_fill_rate.load(Ordering::Relaxed), state.network.packet_sequence_no.load(Ordering::Relaxed));
+    println!("DOWNLINK BUFFER METRICS: [{:?}, Fill Rate: {}, Packets Sent: {}, Average Jitter: {}, Average Latency: {}]", downlink_buffer.metrics, 
+        state.buffer_fill_rate.load(Ordering::Relaxed), 
+        state.network.packet_sequence_no.load(Ordering::Relaxed),
+        downlink_buffer.metrics.get_average_jitter(), 
+        downlink_buffer.metrics.get_average_latency());
     println!("DOWNLINK BUFFER PACKET DROPPED METRICS: [TOTAL: {}, STALE: {}, EMERGENCY: {}, CRITICAL: {}, NORMAL: {}, LOW: {}]", 
                 downlink_buffer.packet_dropped.load(Ordering::Relaxed), 
                 downlink_buffer.stale_packet_dropped.load(Ordering::Relaxed),

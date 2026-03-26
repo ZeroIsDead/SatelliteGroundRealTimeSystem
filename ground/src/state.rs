@@ -92,14 +92,14 @@ impl GroundState {
                 ScheduledCommand {
                     command: Command::RotateAntenna { target_angle: 9000 },
                     priority: Priority::Normal,
-                    interval_ms: 30 * TICK_RATE,
+                    interval_ms: 5 * TICK_RATE,
                     next_send_time: AtomicU64::new(0),
                     enabled: AtomicBool::new(true),
                 },
                 ScheduledCommand {
                     command: Command::SetPowerMode { mode: 1 },
                     priority: Priority::Normal,
-                    interval_ms: 60 * TICK_RATE,
+                    interval_ms: 20 * TICK_RATE,
                     next_send_time: AtomicU64::new(0),
                     enabled: AtomicBool::new(true),
                 },

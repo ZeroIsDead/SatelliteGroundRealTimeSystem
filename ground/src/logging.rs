@@ -94,6 +94,7 @@ fn format_event_id(event_id: &EventID, source: &LogSource) -> &'static str {
         EventID::ConnectionEnd      => "Connection End",
         EventID::QueuePerformance   => if is_external { "Satellite: Queue Performance" }    else { "GCS Queue Performance" },
         EventID::ResourceUtilization => if is_external { "Satellite: CPU Utilization" }     else { "GCS CPU Utilization" },
+        EventID::NetworkPerformance => "Network Performance"
     }
 }
 

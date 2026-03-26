@@ -255,7 +255,24 @@ fn receive_downlink(
     let decode_latency = state.uptime_ms().saturating_sub(receive_time);
 
     if state.clock_sync.samples.load(Ordering::Relaxed) > 0 {
-        state.telemetry_reception_latency.insert_new_metric(decode_latency);
+        let network_latency = receive_time.saturating_sub(packet.creation_time);
+
+        state.telemetry_reception_latency.insert_new_metric(network_latency);
+        
+        log_tx.try_send(Log {
+            source: LogSource::Network,
+            event: Event {
+                task_id: TaskID::NetworkService,
+                event_id: EventID::NetworkPerformance,
+                data: EventData::NetworkPerformance {
+                    priority: packet.priority,
+                    latency_ms: state.telemetry_reception_latency.last_latency_ms.load(Ordering::Relaxed),
+                    jitter_ms: state.telemetry_reception_latency.last_jitter_ms.load(Ordering::Relaxed),
+                    sample_count: state.telemetry_reception_latency.number_of_samples.load(Ordering::Relaxed),
+                },
+                timestamp: receive_time,
+            }
+        }).ok();
     }
 
     if decode_latency > DECODE_DEADLINE_MS {

@@ -43,6 +43,7 @@ pub enum EventID {
     ConnectionEnd = 408,
     QueuePerformance = 501,
     ResourceUtilization = 502,
+    NetworkPerformance = 503,
 }
 
 #[derive(Debug)]

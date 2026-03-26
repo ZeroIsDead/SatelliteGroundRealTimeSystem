@@ -97,9 +97,13 @@ pub fn display_summary(state: &GroundState) {
 
     println!();
 
-    println!("COMMAND METRICS: [{:?}]", state.command_dispatch_latency);
+    println!("COMMAND METRICS: [{:?}, Average Jitter: {}, Average Latency: {}]", state.command_dispatch_latency,
+        state.command_dispatch_latency.get_average_jitter(), 
+        state.command_dispatch_latency.get_average_latency());
 
     println!();
 
-    println!("NETWORK METRICS: [{:?}]", state.telemetry_reception_latency);
+    println!("NETWORK METRICS: [{:?}, Average Jitter: {}, Average Latency: {}]", state.telemetry_reception_latency, 
+        state.telemetry_reception_latency.get_average_jitter(), 
+        state.telemetry_reception_latency.get_average_latency());
 }
