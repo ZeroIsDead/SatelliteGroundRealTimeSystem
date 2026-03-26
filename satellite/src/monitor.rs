@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{SyncSender};
 use std::thread;
-use crate::config::{NETWORK_MS, VISIBILITY_WINDOW_CYCLE_MS, DEGRADED_TO_NORMAL_THRESHOLD, FAULT_RECOVERY_MS, MONITOR_MS, MONITOR_PRIORITY, NORMAL_TO_DEGRADED_THRESHOLD, SEQUENCE_NOT_CONFIRMED, NUMBER_OF_CORES, SENSOR_FAULT_NOT_CONFIRMED, TIMESTAMP_NOT_CONFIRMED};
+use crate::config::{DEGRADED_SKIPPED_SENSOR_CYCLES, DEGRADED_TO_NORMAL_THRESHOLD, FAULT_RECOVERY_MS, MONITOR_MS, MONITOR_PRIORITY, NETWORK_MS, NORMAL_TO_DEGRADED_THRESHOLD, NUMBER_OF_CORES, SENSOR_FAULT_NOT_CONFIRMED, SEQUENCE_NOT_CONFIRMED, TIMESTAMP_NOT_CONFIRMED, VISIBILITY_WINDOW_CYCLE_MS};
 use thread_priority::*;
 
 pub fn run_health_monitor(
@@ -23,48 +23,41 @@ pub fn run_health_monitor(
             let last_seen = sensor.heartbeat.load(Ordering::Acquire);
             
             // "3 consecutive missed cycles" limit
-            let limit: u64 = if state.degraded_mode.load(Ordering::Acquire) && sensor.priority != Priority::Critical {
-                sensor.period * 3 * 2 // If Degraded and Non-Critical, Task Period Doubles
+            let limit: u64 = if state.degraded_mode.load(Ordering::Acquire) {
+                sensor.period * 3 * DEGRADED_SKIPPED_SENSOR_CYCLES // If Degraded and Non-Critical, Task Period Multipies by Constant
             } else {
                 sensor.period * 3 // 3 Cycles
             };
 
             if now.saturating_sub(last_seen) > limit {
+                let fault_timestamp = sensor.fault_timestamp.load(Ordering::Acquire);
+                let recovery_time = now - fault_timestamp;
+
                 let safety_alert_event = Event {
                     task_id: sensor.task_id,
                     event_id: EventID::TaskFault,
-                    data: EventData::None,
+                    data: EventData::FaultRecovery { recovery_time },
                     timestamp: now,
                 };
-                
-                if sensor.fault.load(Ordering::Acquire) != SENSOR_FAULT_NOT_CONFIRMED {
-                    let fault_timestamp = sensor.fault_timestamp.load(Ordering::Acquire);
-                    let recovery_time = now - fault_timestamp;
-
-                    let _ = log_tx.try_send(Log {
-                        source: LogSource::HealthMonitor,
-                        event: safety_alert_event
-                    });
-
-                    if recovery_time > FAULT_RECOVERY_MS && fault_timestamp != TIMESTAMP_NOT_CONFIRMED {
-                        transmit_mission_abort_and_shutdown(&state, &downlink_buffer, &log_tx, recovery_time, now);
-                    }
-
-                    // RESET FAULTS
-                    sensor.fault.store(SENSOR_FAULT_NOT_CONFIRMED, Ordering::Release);
-                    sensor.fault_timestamp.store(TIMESTAMP_NOT_CONFIRMED, Ordering::Release);
-                }
 
                 downlink_buffer.push_and_log(LogSource::HealthMonitor, 
                     TelemetryPacket{
                     priority: Priority::Critical,
-                    creation_time: state.get_synchronized_timestamp(),
+                    creation_time: state.uptime_ms(),
                     payload: SatelliteMessage::Telemetry {
                         event: safety_alert_event,
                     },
                     sequence_no: SEQUENCE_NOT_CONFIRMED,
                 }, 
                 &state, &log_tx, &downlink_buffer);
+
+                if recovery_time > FAULT_RECOVERY_MS && fault_timestamp != TIMESTAMP_NOT_CONFIRMED {
+                    transmit_mission_abort_and_shutdown(&state, &downlink_buffer, &log_tx, recovery_time, now);
+                }
+
+                // RESET FAULTS
+                sensor.fault.store(SENSOR_FAULT_NOT_CONFIRMED, Ordering::Release);
+                sensor.fault_timestamp.store(TIMESTAMP_NOT_CONFIRMED, Ordering::Release);
             }
         }
 
@@ -79,7 +72,7 @@ pub fn run_health_monitor(
                     downlink_buffer.push_and_log(LogSource::HealthMonitor, 
                         TelemetryPacket{
                         priority: Priority::Emergency,
-                        creation_time: state.get_synchronized_timestamp(),
+                        creation_time: state.uptime_ms(),
                         payload: SatelliteMessage::Telemetry {
                                 event: Event {
                                     task_id: TaskID::GlobalSystem,
@@ -111,15 +104,14 @@ pub fn run_health_monitor(
                  downlink_buffer.push_and_log(LogSource::HealthMonitor, 
                     TelemetryPacket{
                     priority: Priority::Normal,
-                    creation_time: state.get_synchronized_timestamp(),
+                    creation_time: state.uptime_ms(),
                     payload: SatelliteMessage::Telemetry {
                             event: Event {
-                                task_id: TaskID::NetworkService,
+                                task_id: TaskID::DownlinkNetworkService,
                                 event_id: EventID::DegradedMode,
                                 data: EventData::QueuePerformance {
                                     latency_ms: downlink_buffer.metrics.last_latency_ms.load(Ordering::Relaxed),
-                                    average_latency_ms: downlink_buffer.metrics.get_average_latency(),
-                                    jitter_ms: downlink_buffer.metrics.get_jitter(),
+                                    jitter_ms: downlink_buffer.metrics.last_jitter_ms.load(Ordering::Relaxed),
                                     buffer_fill_rate: fill_rate_percent,
                                     sample_count: downlink_buffer.metrics.number_of_samples.load(Ordering::Relaxed)
                                 },
@@ -135,15 +127,14 @@ pub fn run_health_monitor(
                  downlink_buffer.push_and_log(LogSource::HealthMonitor, 
                     TelemetryPacket{
                     priority: Priority::Normal,
-                    creation_time: state.get_synchronized_timestamp(),
+                    creation_time: state.uptime_ms(),
                     payload: SatelliteMessage::Telemetry {
                             event: Event {
-                                task_id: TaskID::NetworkService,
+                                task_id: TaskID::DownlinkNetworkService,
                                 event_id: EventID::NormalMode,
                                 data: EventData::QueuePerformance {
                                     latency_ms: downlink_buffer.metrics.last_latency_ms.load(Ordering::Relaxed),
-                                    average_latency_ms: downlink_buffer.metrics.get_average_latency(),
-                                    jitter_ms: downlink_buffer.metrics.get_jitter(),
+                                    jitter_ms: downlink_buffer.metrics.last_jitter_ms.load(Ordering::Relaxed),
                                     buffer_fill_rate: fill_rate_percent,
                                     sample_count: downlink_buffer.metrics.number_of_samples.load(Ordering::Relaxed)
                                 },
@@ -157,29 +148,24 @@ pub fn run_health_monitor(
         }
 
         let current_uptime = state.uptime_ms();
-        let total_cpu_active_ms = state.cpu_active_ms.fetch_add(current_uptime - now, Ordering::SeqCst) as f32;
+        state.cpu_active_ms.fetch_add(current_uptime - now, Ordering::SeqCst);
+        let total_cpu_active_ms = state.cpu_active_ms.load(Ordering::SeqCst) as f32;
         let total_possible_uptime: f32 = (current_uptime * NUMBER_OF_CORES).max(1) as f32; // If Below 1 then set to 1
 
         let cpu_active_ms = (current_uptime as f32 * (total_cpu_active_ms / total_possible_uptime)) as u64;
 
-        downlink_buffer.push_and_log(LogSource::HealthMonitor, 
-            TelemetryPacket{
-            priority: Priority::Normal,
-            creation_time: state.get_synchronized_timestamp(),
-            payload: SatelliteMessage::Telemetry {
-                    event: Event {
-                        task_id: TaskID::GlobalSystem,
-                        event_id: EventID::ResourceUtilization,
-                        data: EventData::SystemStats {
-                            active_ms: cpu_active_ms,
-                            inactive_ms: current_uptime - cpu_active_ms,
-                        },
-                        timestamp: now,
-                    }
-            },
-            sequence_no: SEQUENCE_NOT_CONFIRMED,
-        }, 
-        &state, &log_tx, &downlink_buffer);
+        let _ = log_tx.try_send(Log {
+            source: LogSource::HealthMonitor, 
+            event: Event {
+                task_id: TaskID::GlobalSystem,
+                event_id: EventID::ResourceUtilization,
+                data: EventData::SystemStats {
+                    active_ms: cpu_active_ms,
+                    inactive_ms: current_uptime - cpu_active_ms,
+                },
+                timestamp: state.uptime_ms(),
+            }
+        });
 
         thread::sleep(Duration::from_micros(MONITOR_MS));
     }
@@ -197,7 +183,7 @@ pub fn transmit_mission_abort_and_shutdown(
     downlink_buffer.push_and_log(LogSource::HealthMonitor, // Mission Abort
         TelemetryPacket{
         priority: Priority::Emergency,
-        creation_time: state.get_synchronized_timestamp(),
+        creation_time: state.uptime_ms(),
         payload: SatelliteMessage::Telemetry {
                 event: Event {
                     task_id: TaskID::GlobalSystem,
@@ -216,7 +202,7 @@ pub fn transmit_mission_abort_and_shutdown(
     while downlink_buffer.len() > 0 {
         downlink_buffer.push(TelemetryPacket{ // Sends more of MissionAbort if the previous one was lost
             priority: Priority::Emergency,
-            creation_time: state.get_synchronized_timestamp(),
+            creation_time: state.uptime_ms(),
             payload: SatelliteMessage::Telemetry {
                     event: Event {
                         task_id: TaskID::GlobalSystem,

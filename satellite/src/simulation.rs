@@ -42,7 +42,7 @@ pub fn run_simulation(state: Arc<SatelliteState>) {
         }
 
     
-        state.is_visible.store(now % VISIBILITY_WINDOW_CYCLE_MS < VISIBILITY_WINDOW_LIMIT_MS, Ordering::Release);
+        state.network.is_visible.store(now % VISIBILITY_WINDOW_CYCLE_MS < VISIBILITY_WINDOW_LIMIT_MS, Ordering::Release);
 
         if now >= sensor_fault_interval {
             let sensor_index = rand::thread_rng().gen_range(0..MAX_SENSORS);

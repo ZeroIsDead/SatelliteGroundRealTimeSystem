@@ -8,6 +8,7 @@ use crate::config::{MAX_SUBSYSTEM, TICK_RATE};
 pub struct SyncState {
     pub is_calibrated: AtomicBool,
     pub last_sent_at: AtomicU64,
+    pub samples: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -64,6 +65,7 @@ impl GroundState {
             clock_sync: SyncState {
                 is_calibrated: AtomicBool::new(false),
                 last_sent_at: AtomicU64::new(0),
+                samples: AtomicU64::new(0),
             },
             boot_time: Instant::now(),
             link: LinkState {
@@ -107,13 +109,23 @@ impl GroundState {
             command_dispatch_latency: Metrics {
                 last_latency_ms: AtomicU64::new(0),
                 total_latency_ms: AtomicU64::new(0),
+                max_latency_ms: AtomicU64::new(0),
+                min_latency_ms: AtomicU64::new(0),
+                last_jitter_ms: AtomicU64::new(0),
                 total_jitter_ms: AtomicU64::new(0),
+                max_jitter: AtomicU64::new(0),
+                min_jitter: AtomicU64::new(0),
                 number_of_samples: AtomicU32::new(0),
             },
             telemetry_reception_latency: Metrics {
                 last_latency_ms: AtomicU64::new(0),
                 total_latency_ms: AtomicU64::new(0),
+                max_latency_ms: AtomicU64::new(0),
+                min_latency_ms: AtomicU64::new(0),
+                last_jitter_ms: AtomicU64::new(0),
                 total_jitter_ms: AtomicU64::new(0),
+                max_jitter: AtomicU64::new(0),
+                min_jitter: AtomicU64::new(0),
                 number_of_samples: AtomicU32::new(0),
             },
         }

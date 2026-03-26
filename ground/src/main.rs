@@ -58,6 +58,14 @@ fn main() {
 
     state.cpu_active_ms.fetch_add(state.uptime_ms() - now, Ordering::SeqCst);
 
+    let h_state = Arc::clone(&state);
+
+    ctrlc::set_handler(move || {
+        println!("\nCtrl+C detected! Shutting down...");
+        h_state.is_running.store(false, Ordering::SeqCst);
+    })
+    .expect("Error setting Ctrl+C handler");
+
     while state.is_running.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_micros(MAIN_MS));
     }
@@ -72,6 +80,26 @@ fn main() {
         },
     }).ok();
 
+    display_summary(&state);
+
     drop(log_tx);
+    
     logger_handle.join().unwrap();
+}
+
+
+pub fn display_summary(state: &GroundState) {
+    println!("--------------------------------------SUMMARY--------------------------------------");
+
+    println!("GENERAL METRICS: [ACTIVE_MS: {}, CPU_UTILIZATION: {:.2}%]", 
+                state.cpu_active_ms.load(Ordering::Relaxed), 
+                state.cpu_active_ms.load(Ordering::Relaxed) as f64 / state.uptime_ms() as f64 * 100.0);
+
+    println!();
+
+    println!("COMMAND METRICS: [{:?}]", state.command_dispatch_latency);
+
+    println!();
+
+    println!("NETWORK METRICS: [{:?}]", state.telemetry_reception_latency);
 }

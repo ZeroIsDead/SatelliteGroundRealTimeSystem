@@ -49,19 +49,34 @@ pub enum EventID {
 pub struct Metrics {
     pub last_latency_ms: AtomicU64,
     pub total_latency_ms: AtomicU64,
+    pub max_latency_ms: AtomicU64,
+    pub min_latency_ms: AtomicU64,
+    pub last_jitter_ms: AtomicU64,
     pub total_jitter_ms: AtomicU64,
+    pub max_jitter: AtomicU64,
+    pub min_jitter: AtomicU64,
     pub number_of_samples: AtomicU32,
 }
 
-impl Metrics {
+impl Metrics  {
     pub fn insert_new_metric(&self, new_latency: u64) {
         let last_latency = self.last_latency_ms.swap(new_latency, Ordering::Release);
         self.total_latency_ms.fetch_add(new_latency, Ordering::Relaxed);
-        self.total_jitter_ms.fetch_add(last_latency.abs_diff(new_latency), Ordering::Relaxed);
-        self.number_of_samples.fetch_add(1, Ordering::Relaxed);
+        self.min_latency_ms.fetch_min(new_latency, Ordering::Relaxed);
+        self.max_latency_ms.fetch_max(new_latency, Ordering::Relaxed);
+
+        if self.number_of_samples.fetch_add(1, Ordering::Relaxed) > 0 { // get previous then add, if current is first sample then cant calculate
+            let new_jitter = last_latency.abs_diff(new_latency);
+            self.last_jitter_ms.store(new_jitter, Ordering::Release);
+
+            self.max_jitter.fetch_max(new_jitter, Ordering::Relaxed);
+            self.min_jitter.fetch_min(new_jitter, Ordering::Relaxed);
+            
+            self.total_jitter_ms.fetch_add(new_jitter, Ordering::Relaxed);
+        }
     }
 
-    pub fn get_jitter(&self) -> u64 {
+    pub fn get_average_jitter(&self) -> u64 {
         let total_jitter = self.total_jitter_ms.load(Ordering::Relaxed);
         let samples = self.number_of_samples.load(Ordering::Relaxed);
         if samples == 0 { return 0; }
@@ -79,15 +94,21 @@ impl Metrics {
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone, Copy)]
 pub enum EventData {
     None,
-    QueuePerformance { latency_ms: u64, average_latency_ms: u64, jitter_ms: u64, buffer_fill_rate: u32, sample_count: u32 },
+    QueuePerformance { latency_ms: u64, jitter_ms: u64, buffer_fill_rate: u32, sample_count: u32 },
     SchedulingDrift { drift_ms: u32 },
-    Hardware { value: u32, latency_ms: u64, average_latency_ms: u64, jitter_ms: u64, sample_count: u32 },
+    Hardware { value: u32, latency_ms: u64, jitter_ms: u64, sample_count: u32 },
     CorruptedHardware { value: u32, recovery_time: u64 },
     Subsystem { subsystem_id: SubsystemID },
     SystemStats { active_ms: u64, inactive_ms: u64 },
     FaultRecovery { recovery_time: u64 },
     TimeSync { offset: u64 },
     PacketDrain { count: u32 },
+    NetworkPerformance {
+        priority: Priority, 
+        latency_ms: u64, 
+        jitter_ms: u64,
+        sample_count: u32 
+    }
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy, Serialize, Deserialize)]

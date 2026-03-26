@@ -84,6 +84,7 @@ pub fn run_network_thread(
 fn configure_stream(stream: &mut TcpStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_micros(NETWORK_READ_TIMEOUT)));
     let _ = stream.set_write_timeout(Some(Duration::from_micros(NETWORK_WRITE_TIMEOUT)));
+    let _ = stream.set_nodelay(true);
 }
 
 fn drain_stale_uplink(
@@ -157,7 +158,7 @@ fn maybe_queue_sync_request(
     }
 
     if let Some(dropped) = uplink_buffer.push(TelemetryPacket {
-        priority: Priority::Critical,
+        priority: Priority::Emergency,
         creation_time: 0,
         payload: SatelliteMessage::SyncRequest,
         sequence_no: SEQUENCE_NOT_CONFIRMED,
@@ -189,10 +190,12 @@ fn send_uplink(
         None => return,
     };
 
+    let wire_time = state.uptime_ms();
+    packet.creation_time = wire_time;
+
     let is_sync = packet.payload == SatelliteMessage::SyncRequest;
     if is_sync {
-        let wire_time = state.uptime_ms();
-        packet.creation_time = wire_time;
+        
         state.clock_sync.last_sent_at.store(wire_time, Ordering::Release);
     }
 
@@ -250,7 +253,10 @@ fn receive_downlink(
     };
 
     let decode_latency = state.uptime_ms().saturating_sub(receive_time);
-    state.telemetry_reception_latency.insert_new_metric(decode_latency);
+
+    if state.clock_sync.samples.load(Ordering::Relaxed) > 0 {
+        state.telemetry_reception_latency.insert_new_metric(decode_latency);
+    }
 
     if decode_latency > DECODE_DEADLINE_MS {
         log_tx.try_send(Log {
@@ -273,8 +279,7 @@ fn receive_downlink(
             event_id: EventID::QueuePerformance,
             data: EventData::QueuePerformance {
                 latency_ms: decode_latency,
-                average_latency_ms: state.telemetry_reception_latency.get_average_latency(),
-                jitter_ms: state.telemetry_reception_latency.get_jitter(),
+                jitter_ms: state.telemetry_reception_latency.last_jitter_ms.load(Ordering::Relaxed),
                 buffer_fill_rate: state.buffer_fill_rate.load(Ordering::Relaxed),
                 sample_count: state.telemetry_reception_latency
                     .number_of_samples.load(Ordering::Relaxed),
@@ -318,16 +323,19 @@ fn handle_sync_response(
 
     let rtt = receive_time.saturating_sub(g_sent);
     let one_way = rtt / 2;
-    let offset = satellite_receive.saturating_sub(g_sent + one_way);
+
+    let offset = (g_sent + one_way).saturating_sub(satellite_receive);
 
     if let Some(dropped) = uplink_buffer.push(TelemetryPacket {
-        priority: Priority::Critical,
+        priority: Priority::Emergency,
         creation_time: state.uptime_ms(),
         payload: SatelliteMessage::SyncResult { offset },
         sequence_no: SEQUENCE_NOT_CONFIRMED,
     }) {
         log_uplink_drop(log_tx, &dropped, state.uptime_ms());
     }
+
+    state.clock_sync.samples.fetch_add(1, Ordering::Relaxed);
 
     log_tx.try_send(Log {
         source: LogSource::Network,
@@ -338,6 +346,7 @@ fn handle_sync_response(
             timestamp: receive_time,
         },
     }).ok();
+
 }
 
 fn handle_telemetry(

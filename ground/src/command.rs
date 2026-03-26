@@ -153,8 +153,7 @@ fn dispatch_command(
             data: EventData::Hardware {
                 value: 0,
                 latency_ms: latency,
-                average_latency_ms: state.command_dispatch_latency.get_average_latency(),
-                jitter_ms: state.command_dispatch_latency.get_jitter(),
+                jitter_ms: state.command_dispatch_latency.last_jitter_ms.load(Ordering::Relaxed),
                 sample_count: state.command_dispatch_latency
                     .number_of_samples.load(Ordering::Relaxed),
             },

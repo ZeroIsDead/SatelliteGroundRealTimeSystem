@@ -1,12 +1,10 @@
 use std::collections::BinaryHeap;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU32, AtomicU64};
-use crate::types::{TelemetryPacket, Metrics};
+use crate::types::{TelemetryPacket};
 
 pub struct BoundedBuffer {
     heap: Mutex<BinaryHeap<TelemetryPacket>>,
     pub capacity: usize,
-    pub metrics: Metrics,
 }
 
 impl BoundedBuffer {
@@ -14,12 +12,6 @@ impl BoundedBuffer {
         Self {
             heap: Mutex::new(BinaryHeap::with_capacity(capacity)),
             capacity,
-            metrics: Metrics {
-                last_latency_ms: AtomicU64::new(0),
-                total_latency_ms: AtomicU64::new(0),
-                total_jitter_ms: AtomicU64::new(0),
-                number_of_samples: AtomicU32::new(0),
-            },
         }
     }
 

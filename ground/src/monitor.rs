@@ -29,7 +29,7 @@ pub fn run_fault_monitor(
         check_subsystem_interlock_alerts(&state, &log_tx, now);
         report_buffer_fill_rate(&state, &uplink_buffer);
         report_cpu_utilization(&state, &log_tx, now);
-        report_queue_performance(&state, &uplink_buffer, &log_tx, now);
+        report_queue_performance(&state,  &log_tx, now);
 
         thread::sleep(Duration::from_micros(MONITOR_MS));
     }
@@ -106,11 +106,10 @@ fn report_cpu_utilization(state: &Arc<GroundState>, log_tx: &SyncSender<Log>, no
 
 fn report_queue_performance(
     state: &Arc<GroundState>,
-    uplink_buffer: &Arc<BoundedBuffer>,
     log_tx: &SyncSender<Log>,
     now: u64,
 ) {
-    let metrics = &uplink_buffer.metrics;
+    let metrics = &state.command_dispatch_latency;
     let sample_count = metrics.number_of_samples.load(Ordering::Relaxed);
     if sample_count == 0 {
         return;
@@ -123,8 +122,7 @@ fn report_queue_performance(
             event_id: EventID::QueuePerformance,
             data: EventData::QueuePerformance {
                 latency_ms: metrics.last_latency_ms.load(Ordering::Relaxed),
-                average_latency_ms: metrics.get_average_latency(),
-                jitter_ms: metrics.get_jitter(),
+                jitter_ms: metrics.last_jitter_ms.load(Ordering::Relaxed),
                 buffer_fill_rate: state.buffer_fill_rate.load(Ordering::Relaxed),
                 sample_count,
             },

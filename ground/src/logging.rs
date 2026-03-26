@@ -1,5 +1,5 @@
 use crate::config::LOGGING_PRIORITY;
-use crate::types::{Log, LogSource, TaskID, EventID, EventData, SubsystemID};
+use crate::types::{Log, LogSource, TaskID, EventID, EventData, SubsystemID, Priority};
 use std::sync::mpsc::Receiver;
 use thread_priority::*;
 use std::fs::OpenOptions;
@@ -101,10 +101,10 @@ fn format_event_data(buf: &mut String, data: &EventData) {
     match data {
         EventData::None => {}
 
-        EventData::QueuePerformance { latency_ms, average_latency_ms, jitter_ms, buffer_fill_rate, sample_count } => {
+        EventData::QueuePerformance { latency_ms, jitter_ms, buffer_fill_rate, sample_count } => {
             let _ = write!(buf,
-                "Latency: {}μs  Avg: {}μs  Jitter: {}μs  Fill: {}%  Samples: {}\t",
-                latency_ms, average_latency_ms, jitter_ms, buffer_fill_rate, sample_count
+                "Latency: {}μs Jitter: {}μs  Fill: {}%  Samples: {}\t",
+                latency_ms, jitter_ms, buffer_fill_rate, sample_count
             );
         }
 
@@ -112,10 +112,10 @@ fn format_event_data(buf: &mut String, data: &EventData) {
             let _ = write!(buf, "Drift: {}μs\t", drift_ms);
         }
 
-        EventData::Hardware { value, latency_ms, average_latency_ms, jitter_ms, sample_count } => {
+        EventData::Hardware { value, latency_ms, jitter_ms, sample_count } => {
             let _ = write!(buf,
-                "Value: {:.2}  Latency: {}μs  Avg: {}μs  Jitter: {}μs  Samples: {}\t",
-                (*value as f32) / 100.0, latency_ms, average_latency_ms, jitter_ms, sample_count
+                "Value: {:.2}  Latency: {}μs Jitter: {}μs  Samples: {}\t",
+                (*value as f32) / 100.0, latency_ms, jitter_ms, sample_count
             );
         }
 
@@ -152,6 +152,17 @@ fn format_event_data(buf: &mut String, data: &EventData) {
 
         EventData::PacketDrain { count } => {
             let _ = write!(buf, "Count: {}\t", count);
+        }
+
+        EventData::NetworkPerformance { priority, latency_ms, jitter_ms, sample_count } => {
+            let priority_string = match priority {
+                Priority::Emergency => "Emergency",
+                Priority::Critical => "Critical",
+                Priority::Normal => "Normal",
+                Priority::Low => "Low"
+            };
+
+            let _ = write!(buf, "NETWORK PERFORMANCE: Priority: {} Latency: {}μs Jitter: {}μs Sample Count: {}\t", priority_string, latency_ms, jitter_ms, sample_count);
         }
     }
 }

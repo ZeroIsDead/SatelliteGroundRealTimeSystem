@@ -2,7 +2,7 @@ pub const TICK_RATE: u64 = 1000; // 1ms
 
 pub const NETWORK_PORT: &str = "127.0.0.1:8000";
 pub const NETWORK_READ_TIMEOUT: u64 = 100;
-pub const NETWORK_WRITE_TIMEOUT: u64 = 2 * TICK_RATE;
+pub const NETWORK_WRITE_TIMEOUT: u64 = 1 * TICK_RATE;
 pub const SEQUENCE_NOT_CONFIRMED: u32 = 0;
 
 pub const PACKET_HISTORY_BUFFER_CAPACITY: usize = 1024;

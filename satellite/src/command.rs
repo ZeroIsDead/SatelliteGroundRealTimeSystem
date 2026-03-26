@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{SyncSender};
 use std::thread;
-use crate::config::{COMMAND_MS, COMMAND_PRIORITY, SEQUENCE_NOT_CONFIRMED, TIMESTAMP_NOT_CONFIRMED};
+use crate::config::{VISIBILITY_WINDOW_CYCLE_MS, COMMAND_MS, COMMAND_PRIORITY, SEQUENCE_NOT_CONFIRMED, TIMESTAMP_NOT_CONFIRMED};
 use thread_priority::*;
 
 pub fn run_command_executor(
@@ -20,6 +20,26 @@ pub fn run_command_executor(
     while state.is_running.load(Ordering::SeqCst) {
         if let Some(packet) = uplink_buffer.pop() {
             let start_time = state.uptime_ms();
+            let queue_latency_ms = start_time.saturating_sub(packet.creation_time);
+
+            if queue_latency_ms > 10 * VISIBILITY_WINDOW_CYCLE_MS && packet.priority != Priority::Emergency {  // Packet Missed 10 Windows
+                downlink_buffer.stale_packet_dropped.fetch_add(1, Ordering::Relaxed);
+                downlink_buffer.packet_dropped.fetch_add(1, Ordering::Relaxed);
+
+                match packet.priority {
+                    Priority::Critical => {
+                        downlink_buffer.critical_packet_dropped.fetch_add(1, Ordering::Relaxed);}
+                    Priority::Normal => {
+                        downlink_buffer.normal_packet_dropped.fetch_add(1, Ordering::Relaxed);}
+                    Priority::Low => {
+                        downlink_buffer.low_packet_dropped.fetch_add(1, Ordering::Relaxed);}
+                    _ => {}
+                }
+
+                continue;
+            }
+
+            uplink_buffer.metrics.insert_new_metric(queue_latency_ms);
 
             match packet.payload {
                 SatelliteMessage::Command { command, .. } => {
@@ -45,16 +65,23 @@ pub fn run_command_executor(
 fn execute_instruction(command: Command, state: &Arc<SatelliteState>, log_tx: &SyncSender<Log>, downlink_buffer: &Arc<BoundedBuffer>) {
     let (task_id, event_data) = match command {
         Command::ClearSubsystemFault { subsystem_id } => {
+            let mut completed = false;
+
             for subsystem in &state.subsystem_health {
                 if subsystem.id == subsystem_id && subsystem.fault.load(Ordering::Acquire) {
                     subsystem.fault_interlock.store(false, Ordering::Release);
                     subsystem.fault.store(false, Ordering::Release);
-                    subsystem.fault_timestamp.store(TIMESTAMP_NOT_CONFIRMED, Ordering::Release);
+                    subsystem.fault_timestamp.swap(TIMESTAMP_NOT_CONFIRMED, Ordering::Release);
                     subsystem.fault_reported.store(false, Ordering::Release);
+                    completed = true;
                 }
             }
-
-            (TaskID::ClearSubsystemFault, EventData::Subsystem { subsystem_id })
+            
+            if completed {
+                (TaskID::ClearSubsystemFault, EventData::Subsystem { subsystem_id })
+            } else {
+                (TaskID::None, EventData::None)
+            }
         },
         Command::RotateAntenna { target_angle } => {
             state.subsystem_health[SubsystemID::Antenna as usize].value.store(target_angle as u32, Ordering::Relaxed);
@@ -68,10 +95,7 @@ fn execute_instruction(command: Command, state: &Arc<SatelliteState>, log_tx: &S
             (TaskID::SetPowerMode, EventData::None)
         },
         _ => {
-            
-
             (TaskID::None, EventData::None)
-
         }
     };
 
@@ -79,7 +103,7 @@ fn execute_instruction(command: Command, state: &Arc<SatelliteState>, log_tx: &S
         downlink_buffer.push_and_log(LogSource::CommandExecutor, 
             TelemetryPacket{
             priority: Priority::Normal,
-            creation_time: state.get_synchronized_timestamp(),
+            creation_time: state.uptime_ms(),
             payload: SatelliteMessage::Telemetry {
                     event: Event {
                     task_id: TaskID::GlobalSystem,
@@ -98,7 +122,7 @@ fn execute_instruction(command: Command, state: &Arc<SatelliteState>, log_tx: &S
     downlink_buffer.push_and_log(LogSource::CommandExecutor, 
         TelemetryPacket{
         priority: Priority::Critical,
-        creation_time: state.get_synchronized_timestamp(),
+        creation_time: state.uptime_ms(),
         payload: SatelliteMessage::Telemetry {
                 event: Event {
                     task_id: task_id,

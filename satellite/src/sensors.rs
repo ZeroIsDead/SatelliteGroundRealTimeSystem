@@ -3,7 +3,7 @@ use std::sync::mpsc::SyncSender;
 use std::time::{Duration};
 use std::sync::atomic::Ordering;
 
-use crate::config::{FAULT_RECOVERY_MS, SEQUENCE_NOT_CONFIRMED, SENSOR_DELAY_MS, SENSOR_FAULT_MS, SENSOR_FAULT_NOT_CONFIRMED, TIMESTAMP_NOT_CONFIRMED};
+use crate::config::{DEGRADED_SKIPPED_SENSOR_CYCLES, FAULT_RECOVERY_MS, SEQUENCE_NOT_CONFIRMED, SENSOR_DELAY_MS, SENSOR_FAULT_MS, SENSOR_FAULT_NOT_CONFIRMED, TIMESTAMP_NOT_CONFIRMED};
 use crate::types::{Event, EventData, EventID, Log, LogSource, Priority, SatelliteMessage, TelemetryPacket};
 use crate::state::SatelliteState;
 use crate::buffer::BoundedBuffer;
@@ -38,21 +38,15 @@ pub fn run_sensor_task(
 
         let task_start = state.uptime_ms();
         if next_wake_time < task_start {
-            downlink_buffer.push_and_log(LogSource::Sensor, 
-                TelemetryPacket{
-                priority: Priority::Normal,
-                creation_time: state.get_synchronized_timestamp(),
-                payload: SatelliteMessage::Telemetry {
-                        event: Event {
-                            task_id: sensor.task_id,
-                            event_id: EventID::StartDelay,
-                            data: EventData::SchedulingDrift { drift_ms: (task_start - next_wake_time) as u32},
-                            timestamp: state.uptime_ms(),
-                        },
+            let _ = log_tx.try_send(Log {
+                source: LogSource::Sensor, 
+                event: Event {
+                    task_id: sensor.task_id,
+                    event_id: EventID::StartDelay,
+                    data: EventData::SchedulingDrift { drift_ms: (task_start - next_wake_time) as u32},
+                    timestamp: state.uptime_ms(),
                 },
-                sequence_no: SEQUENCE_NOT_CONFIRMED,
-            }, 
-            &state, &log_tx, &downlink_buffer);
+            });
 
             next_wake_time = task_start;
         }
@@ -70,7 +64,7 @@ pub fn run_sensor_task(
             downlink_buffer.push_and_log(LogSource::Sensor, 
                 TelemetryPacket{
                 priority: Priority::Critical,
-                creation_time: state.get_synchronized_timestamp(),
+                creation_time: state.uptime_ms(),
                 payload: SatelliteMessage::Telemetry {
                         event: Event {
                             task_id: sensor.task_id,
@@ -102,11 +96,11 @@ pub fn run_sensor_task(
         sensor.heartbeat.store(completion_time, Ordering::Release);
         let latency = completion_time - task_start;
         sensor.metrics.insert_new_metric(latency);
-        let jitter = sensor.metrics.get_jitter();
+        let jitter = sensor.metrics.last_jitter_ms.load(Ordering::Relaxed);
 
         let internal_msg = TelemetryPacket {
             priority: sensor.data_priority,
-            creation_time: state.get_synchronized_timestamp(),
+            creation_time: state.uptime_ms(),
             payload: SatelliteMessage::Telemetry {
                 event: Event {
                     task_id: sensor.task_id,
@@ -114,7 +108,6 @@ pub fn run_sensor_task(
                     data: EventData::Hardware { 
                         value: current_value, 
                         latency_ms: latency, 
-                        average_latency_ms: sensor.metrics.get_average_latency(), 
                         jitter_ms: jitter,
                         sample_count: sensor.metrics.number_of_samples.load(Ordering::Relaxed)
                     },
@@ -131,7 +124,7 @@ pub fn run_sensor_task(
             downlink_buffer.push_and_log(LogSource::Sensor, 
                 TelemetryPacket{
                 priority: Priority::Normal,
-                creation_time: state.get_synchronized_timestamp(),
+                creation_time: state.uptime_ms(),
                 payload: SatelliteMessage::Telemetry {
                         event: Event {
                             task_id: sensor.task_id,
@@ -139,7 +132,6 @@ pub fn run_sensor_task(
                             data: EventData::Hardware { 
                                 value: current_value, 
                                 latency_ms: latency, 
-                                average_latency_ms: sensor.metrics.get_average_latency(), 
                                 jitter_ms: jitter,
                                 sample_count: sensor.metrics.number_of_samples.load(Ordering::Relaxed)
                             },
@@ -151,8 +143,10 @@ pub fn run_sensor_task(
             &state, &log_tx, &downlink_buffer);
         }
 
-        if sensor.priority != Priority::Critical && state.degraded_mode.load(Ordering::Acquire) {
-            next_wake_time += interval; 
+        if state.degraded_mode.load(Ordering::Acquire) {
+            next_wake_time += interval * DEGRADED_SKIPPED_SENSOR_CYCLES; // Miss Next 3 Cycles 
+        } else {
+            next_wake_time += interval;
         }
 
         state.cpu_active_ms.fetch_add(state.uptime_ms() - task_start, Ordering::SeqCst);
@@ -161,25 +155,18 @@ pub fn run_sensor_task(
         if next_wake_time > now {
             thread::sleep(Duration::from_micros(next_wake_time - now));
         } else {
-            downlink_buffer.push_and_log(LogSource::Sensor, 
-                TelemetryPacket{
-                priority: Priority::Critical,
-                creation_time: state.get_synchronized_timestamp(),
-                payload: SatelliteMessage::Telemetry {
-                        event: Event {
-                            task_id: sensor.task_id,
-                            event_id: EventID::CompletionDelay,
-                            data: EventData::SchedulingDrift { drift_ms: (now - next_wake_time) as u32},
-                            timestamp: state.uptime_ms(),
-                        },
+            let _ = log_tx.try_send(Log {
+                source: LogSource::Sensor, 
+                event: Event {
+                    task_id: sensor.task_id,
+                    event_id: EventID::CompletionDelay,
+                    data: EventData::SchedulingDrift { drift_ms: (now - next_wake_time) as u32},
+                    timestamp: state.uptime_ms(),
                 },
-                sequence_no: SEQUENCE_NOT_CONFIRMED,
-            }, 
-            &state, &log_tx, &downlink_buffer);
+            });
 
             next_wake_time = now;
         }
 
-        next_wake_time += interval;
     }
 }

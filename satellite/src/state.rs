@@ -7,7 +7,8 @@ use crate::config::{MAX_SENSORS, TICK_RATE, MAX_SUBSYSTEM};
 pub struct SatelliteState {
     // Control Flags
     pub is_running: AtomicBool,
-    pub is_visible: AtomicBool, 
+    pub is_shutdown: AtomicBool,
+    pub network: NetworkState,
     pub degraded_mode: AtomicBool,
 
     // Clock
@@ -21,7 +22,6 @@ pub struct SatelliteState {
     // Performance Metrics
     pub cpu_active_ms: AtomicU64,
     pub buffer_fill_rate: AtomicU32, // (Current size * 100) / Capacity
-    pub packet_sequence_no: AtomicU32,
 }
 
 #[derive(Debug)]
@@ -68,11 +68,34 @@ pub struct SyncState {
     pub is_calibrated: AtomicBool, // Is it Syncing or not
 }
 
+#[derive(Debug)]
+pub struct NetworkState {
+    pub is_visible: AtomicBool,
+    pub metrics: Metrics,
+    pub packet_sequence_no: AtomicU32,
+
+}
+
 impl SatelliteState {
     pub fn new() -> Self {
         Self {
             is_running: AtomicBool::new(true),
-            is_visible: AtomicBool::new(false),
+            is_shutdown: AtomicBool::new(false),
+            network: NetworkState { 
+                is_visible: AtomicBool::new(false), 
+                packet_sequence_no: AtomicU32::new(1),
+                metrics: Metrics {
+                    last_latency_ms: AtomicU64::new(0),
+                    total_latency_ms: AtomicU64::new(0),
+                    max_latency_ms: AtomicU64::new(0),
+                    min_latency_ms: AtomicU64::new(0),
+                    last_jitter_ms: AtomicU64::new(0),
+                    total_jitter_ms: AtomicU64::new(0),
+                    max_jitter: AtomicU64::new(0),
+                    min_jitter: AtomicU64::new(0),
+                    number_of_samples: AtomicU32::new(0),
+                }
+            },
             degraded_mode: AtomicBool::new(false),
             clock_sync: SyncState {
                 total_offset_ms: AtomicU64::new(0),
@@ -97,7 +120,12 @@ impl SatelliteState {
                     metrics: Metrics {
                         last_latency_ms: AtomicU64::new(0),
                         total_latency_ms: AtomicU64::new(0),
+                        max_latency_ms: AtomicU64::new(0),
+                        min_latency_ms: AtomicU64::new(0),
+                        last_jitter_ms: AtomicU64::new(0),
                         total_jitter_ms: AtomicU64::new(0),
+                        max_jitter: AtomicU64::new(0),
+                        min_jitter: AtomicU64::new(0),
                         number_of_samples: AtomicU32::new(0),
                     }
                 },
@@ -115,7 +143,12 @@ impl SatelliteState {
                     metrics: Metrics {
                         last_latency_ms: AtomicU64::new(0),
                         total_latency_ms: AtomicU64::new(0),
+                        max_latency_ms: AtomicU64::new(0),
+                        min_latency_ms: AtomicU64::new(0),
+                        last_jitter_ms: AtomicU64::new(0),
                         total_jitter_ms: AtomicU64::new(0),
+                        max_jitter: AtomicU64::new(0),
+                        min_jitter: AtomicU64::new(0),
                         number_of_samples: AtomicU32::new(0),
                     }
                 },
@@ -133,7 +166,12 @@ impl SatelliteState {
                     metrics: Metrics {
                         last_latency_ms: AtomicU64::new(0),
                         total_latency_ms: AtomicU64::new(0),
+                        max_latency_ms: AtomicU64::new(0),
+                        min_latency_ms: AtomicU64::new(0),
+                        last_jitter_ms: AtomicU64::new(0),
                         total_jitter_ms: AtomicU64::new(0),
+                        max_jitter: AtomicU64::new(0),
+                        min_jitter: AtomicU64::new(0),
                         number_of_samples: AtomicU32::new(0),
                     }
                 },
@@ -160,7 +198,6 @@ impl SatelliteState {
             
             cpu_active_ms: AtomicU64::new(0),
             buffer_fill_rate: AtomicU32::new(0),
-            packet_sequence_no: AtomicU32::new(1),
         }
     }
 
@@ -170,5 +207,9 @@ impl SatelliteState {
 
     pub fn get_synchronized_timestamp(&self) -> u64 {
         self.uptime_ms() + &self.clock_sync.average_offset_ms.load(Ordering::Relaxed) 
+    }
+
+    pub fn synchronize_timestamp(&self, timestamp: u64) -> u64 {
+        timestamp + &self.clock_sync.average_offset_ms.load(Ordering::Relaxed)
     }
 }

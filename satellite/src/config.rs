@@ -7,10 +7,12 @@ pub const DATA_BUFFER_CAPACITY: usize = 1024; // 10 Bits
 pub const LOG_BUFFER_CAPACITY: usize = 1024; // 10 Bits
 pub const PACKET_HISTORY_BUFFER_CAPACITY: usize = 1024; // 10 Bits
 pub const NORMAL_TO_DEGRADED_THRESHOLD: u32 = 80; // 80%
-pub const DEGRADED_TO_NORMAL_THRESHOLD: u32 = 50; // 50%
+pub const DEGRADED_TO_NORMAL_THRESHOLD: u32 = 60; // 60%
+pub const DEGRADED_SKIPPED_SENSOR_CYCLES: u64 = 3;
+
 pub const NETWORK_PORT: &str = "127.0.0.1:8000";
 pub const NETWORK_READ_TIMEOUT: u64 = 100;
-pub const NETWORK_WRITE_TIMEOUT: u64 = 2 * TICK_RATE;
+pub const NETWORK_WRITE_TIMEOUT: u64 = 1 * TICK_RATE;
 
 pub const MAX_SENSORS: usize = 3;
 pub const MAX_SUBSYSTEM: usize = 2;

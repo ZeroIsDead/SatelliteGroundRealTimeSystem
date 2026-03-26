@@ -1,7 +1,7 @@
 use crate::{config::LOGGING_PRIORITY, types::{Log, SubsystemID}};
 use std::sync::mpsc::{Receiver};
 use thread_priority::*;
-use crate::types::{LogSource, TaskID, EventID, EventData};
+use crate::types::{LogSource, TaskID, EventID, EventData, Priority};
 use std::fs::OpenOptions;
 use std::io::Write as IoWrite;  
 use std::fmt::Write as FmtWrite; 
@@ -41,6 +41,8 @@ pub fn run_logger(log_rx: Receiver<Log>) {
 
             TaskID::GlobalSystem => "Global", 
             TaskID::NetworkService => "Network Service",
+            TaskID::DownlinkNetworkService => "Downlink Network Service",
+            TaskID::UplinkNetworkService => "Uplink Network Service",
             TaskID::None => ""
         };
 
@@ -77,19 +79,20 @@ pub fn run_logger(log_rx: Receiver<Log>) {
             // System Info
             EventID::QueuePerformance => "Queue Performance",  
             EventID::ResourceUtilization => "Resource Utilization",
+            EventID::NetworkPerformance => "Network Performance"
         };
 
         let _ = write!(format_buffer, "[Satellite] [{:>7}]\tTask: [{:>30}]\tEvent: [{:>30}]\t", source_str, task_str, event_str);
 
         match log.event.data {
-            EventData::QueuePerformance { latency_ms, average_latency_ms, jitter_ms, buffer_fill_rate, sample_count } => {
-                let _ = write!(format_buffer, "QUEUE_PERF: [Latency: {}μs, Average Latency: {}μs, Jitter: {}μs, Buffer Fill Rate: {}%, Sample Count: {}]\t", latency_ms, average_latency_ms, jitter_ms, buffer_fill_rate, sample_count);
+            EventData::QueuePerformance { latency_ms, jitter_ms, buffer_fill_rate, sample_count } => {
+                let _ = write!(format_buffer, "QUEUE_PERF: [Latency: {}μs, Jitter: {}μs, Buffer Fill Rate: {:.2}%, Sample Count: {}]\t", latency_ms, jitter_ms, buffer_fill_rate, sample_count);
             }
             EventData::SchedulingDrift { drift_ms  } => {
                 let _ = write!(format_buffer, "DRIFT: [{}μs]\t", drift_ms);
             }
-            EventData::Hardware { value, latency_ms, average_latency_ms, jitter_ms, sample_count } => {
-                let _ = write!(format_buffer, "HARDWARE: [Value: {}, Latency: {}μs, Average Latency: {}μs, Jitter: {}μs, Sample Count: {}]\t", (value / 100) as f32,  latency_ms, average_latency_ms, jitter_ms, sample_count); // Sensor Data Stored as Integer -> (Float with 2 Decimal Places)
+            EventData::Hardware { value, latency_ms, jitter_ms, sample_count } => {
+                let _ = write!(format_buffer, "HARDWARE: [Value: {}, Latency: {}μs, Jitter: {}μs, Sample Count: {}]\t", (value / 100) as f32,  latency_ms, jitter_ms, sample_count); // Sensor Data Stored as Integer -> (Float with 2 Decimal Places)
             }
             EventData::CorruptedHardware { value, recovery_time } => {
 let _ = write!(format_buffer, "CORRUPTED_HARDWARE: [Value: {}, Recovery Time: {}μs]\t", (value / 100) as f32, recovery_time); // Sensor Data Stored as Integer -> (Float with 2 Decimal Places)
@@ -101,13 +104,23 @@ let _ = write!(format_buffer, "CORRUPTED_HARDWARE: [Value: {}, Recovery Time: {}
                 });
             }
             EventData::SystemStats { active_ms, inactive_ms } => {
-                let _ = write!(format_buffer, "CPU: [Active: {}μs, Inactive: {}μs]\t", active_ms, inactive_ms);
+                let _ = write!(format_buffer, "CPU: [Active: {}μs, Inactive: {}μs, Utilization: {:.2}%]\t", active_ms, inactive_ms, active_ms as f64 / log.event.timestamp as f64 * 100.0);
             }
             EventData::FaultRecovery { recovery_time } => {
                 let _ = write!(format_buffer, "RECOVERY TIME: [{}μs]\t", recovery_time);
             }
             EventData::TimeSync { offset } => {
                 let _ = write!(format_buffer, "OFFSET: [{}μs]\t", offset);
+            }
+            EventData::NetworkPerformance { priority, latency_ms, jitter_ms, sample_count } => {
+                let priority_string = match priority {
+                    Priority::Emergency => "Emergency",
+                    Priority::Critical => "Critical",
+                    Priority::Normal => "Normal",
+                    Priority::Low => "Low"
+                };
+
+                let _ = write!(format_buffer, "NETWORK PERFORMANCE: [Priority: {}, Latency: {}μs, Jitter: {}μs, Sample Count: {}]\t", priority_string, latency_ms, jitter_ms, sample_count);
             }
             EventData::None => {}
         }
